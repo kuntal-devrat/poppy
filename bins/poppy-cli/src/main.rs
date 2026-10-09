@@ -10,7 +10,7 @@ use poppy_demux::{Demuxer, Mp4Demuxer};
 #[derive(Parser, Debug)]
 #[command(
     name = "poppy",
-    version = "0.1.0",
+    version = "0.2.0",
     about = "🌸 Poppy — Modern media pipeline inspector and elementary stream dumper"
 )]
 struct Cli {

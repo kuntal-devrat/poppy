@@ -31,6 +31,20 @@ pub const ID_CLUSTER_TIMESTAMP: u32 = 0xE7;
 pub const ID_SIMPLE_BLOCK: u32 = 0xA3;
 pub const ID_BLOCK_GROUP: u32 = 0xA0;
 pub const ID_BLOCK: u32 = 0xA1;
+pub const ID_CUES: u32 = 0x1C53BB6B;
+pub const ID_CUE_POINT: u32 = 0xBB;
+pub const ID_CUE_TIME: u32 = 0xB3;
+pub const ID_CUE_TRACK_POSITIONS: u32 = 0xB7;
+pub const ID_CUE_TRACK: u32 = 0xF7;
+pub const ID_CUE_CLUSTER_POSITION: u32 = 0xF1;
+
+/// A parsed Matroska CuePoint for O(log N) seeking.
+#[derive(Debug, Clone)]
+pub struct MatroskaCue {
+    pub time_ticks: u64,
+    pub track_num: u64,
+    pub cluster_position: u64,
+}
 
 /// A parsed Matroska track.
 #[derive(Debug, Clone)]
@@ -80,6 +94,7 @@ pub struct MatroskaDemuxer {
     tracks: Vec<MatroskaTrack>,
     stream_infos: Vec<StreamInfo>,
     samples: Vec<MatroskaSample>,
+    cues: Vec<MatroskaCue>,
     cursor: usize,
 }
 
@@ -119,6 +134,7 @@ impl MatroskaDemuxer {
         let mut timestamp_scale_ns = 1_000_000u64; // Default 1ms = 1,000,000 ns
         let mut tracks = Vec::new();
         let mut samples = Vec::new();
+        let mut cues = Vec::new();
 
         // 3. Walk Segment children
         for seg_res in EbmlIter::new(segment_elem.payload, segment_elem.offset) {
@@ -214,6 +230,42 @@ impl MatroskaDemuxer {
                         }
                     }
                 }
+                ID_CUES => {
+                    for cue_res in EbmlIter::new(elem.payload, elem.offset) {
+                        let cue_elem = cue_res?;
+                        if cue_elem.id == ID_CUE_POINT {
+                            let mut cue_time = 0u64;
+                            let mut cue_track = 1u64;
+                            let mut cluster_pos = 0u64;
+
+                            for cp_res in EbmlIter::new(cue_elem.payload, cue_elem.offset) {
+                                let cp_elem = cp_res?;
+                                match cp_elem.id {
+                                    ID_CUE_TIME => cue_time = read_uint(cp_elem.payload),
+                                    ID_CUE_TRACK_POSITIONS => {
+                                        for pos_res in EbmlIter::new(cp_elem.payload, cp_elem.offset) {
+                                            let pos_elem = pos_res?;
+                                            match pos_elem.id {
+                                                ID_CUE_TRACK => cue_track = read_uint(pos_elem.payload),
+                                                ID_CUE_CLUSTER_POSITION => {
+                                                    cluster_pos = read_uint(pos_elem.payload);
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+
+                            cues.push(MatroskaCue {
+                                time_ticks: cue_time,
+                                track_num: cue_track,
+                                cluster_position: cluster_pos,
+                            });
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -239,8 +291,14 @@ impl MatroskaDemuxer {
             tracks,
             stream_infos,
             samples,
+            cues,
             cursor: 0,
         })
+    }
+
+    /// Access parsed Matroska cues (seek points).
+    pub fn cues(&self) -> &[MatroskaCue] {
+        &self.cues
     }
 }
 
@@ -277,21 +335,109 @@ impl Demuxer for MatroskaDemuxer {
 
     fn seek_to_keyframe(&mut self, stream_index: usize, timestamp: i64) -> Result<(), DemuxError> {
         let track_num = self.tracks.get(stream_index).map(|t| t.track_num).unwrap_or(1);
+
+        // Fast O(log N) binary search: find first sample with timestamp > requested timestamp
+        let upper = self.samples.partition_point(|s| s.timestamp_ticks <= timestamp);
         let mut target_idx = 0;
 
-        for (i, s) in self.samples.iter().enumerate() {
-            if s.track_num == track_num {
-                if s.timestamp_ticks <= timestamp {
-                    if s.is_keyframe {
-                        target_idx = i;
-                    }
-                } else {
-                    break;
-                }
+        // Scan backwards from upper bound to find nearest keyframe for this track
+        for i in (0..upper).rev() {
+            if self.samples[i].track_num == track_num && self.samples[i].is_keyframe {
+                target_idx = i;
+                break;
             }
         }
 
         self.cursor = target_idx;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_ebml_master(id: u32, payload: &[u8]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        if id > 0xFFFFFF {
+            buf.extend_from_slice(&id.to_be_bytes());
+        } else if id > 0xFFFF {
+            buf.extend_from_slice(&id.to_be_bytes()[1..]);
+        } else if id > 0xFF {
+            buf.extend_from_slice(&id.to_be_bytes()[2..]);
+        } else {
+            buf.push(id as u8);
+        }
+        if payload.len() < 127 {
+            buf.push(0x80 | (payload.len() as u8));
+        } else {
+            buf.push(0x40 | ((payload.len() >> 8) as u8));
+            buf.push((payload.len() & 0xFF) as u8);
+        }
+        buf.extend_from_slice(payload);
+        buf
+    }
+
+    #[test]
+    fn test_matroska_cues_and_seeking() {
+        let ebml_hdr = make_ebml_master(ID_EBML_HEADER, &[]);
+
+        let track_entry = make_ebml_master(ID_TRACK_ENTRY, &[
+            // TrackNumber = 1
+            0xD7, 0x81, 0x01,
+            // TrackType = 1 (video)
+            0x83, 0x81, 0x01,
+            // CodecID = "V_MPEG4/ISO/AVC"
+            0x86, 0x8F, b'V', b'_', b'M', b'P', b'E', b'G', b'4', b'/', b'I', b'S', b'O', b'/', b'A', b'V', b'C',
+        ]);
+        let tracks_elem = make_ebml_master(ID_TRACKS, &track_entry);
+
+        // Cluster 0 at time 0
+        let mut cluster_payload = Vec::new();
+        cluster_payload.extend_from_slice(&[0xE7, 0x81, 0x00]);
+        // SimpleBlock: track 1, rel_time 0, keyframe
+        cluster_payload.extend_from_slice(&[0xA3, 0x85, 0x81, 0x00, 0x00, 0x80, 0xAA]);
+        // SimpleBlock: track 1, rel_time 1000, non-keyframe
+        cluster_payload.extend_from_slice(&[0xA3, 0x85, 0x81, 0x03, 0xE8, 0x00, 0xBB]);
+        let cluster_elem = make_ebml_master(ID_CLUSTER, &cluster_payload);
+
+        // Cues: CuePoint time 0
+        let cue_track_pos = make_ebml_master(ID_CUE_TRACK_POSITIONS, &[
+            0xF7, 0x81, 0x01, // CueTrack = 1
+            0xF1, 0x81, 0x50, // CueClusterPosition = 0x50
+        ]);
+        let mut cue_point_payload = Vec::new();
+        cue_point_payload.extend_from_slice(&[0xB3, 0x81, 0x00]); // CueTime = 0
+        cue_point_payload.extend_from_slice(&cue_track_pos);
+        let cue_point = make_ebml_master(ID_CUE_POINT, &cue_point_payload);
+        let cues_elem = make_ebml_master(ID_CUES, &cue_point);
+
+        let mut seg_payload = Vec::new();
+        seg_payload.extend_from_slice(&tracks_elem);
+        seg_payload.extend_from_slice(&cluster_elem);
+        seg_payload.extend_from_slice(&cues_elem);
+        let seg_elem = make_ebml_master(ID_SEGMENT, &seg_payload);
+
+        let mut mkv_bytes = Vec::new();
+        mkv_bytes.extend_from_slice(&ebml_hdr);
+        mkv_bytes.extend_from_slice(&seg_elem);
+
+        let mut demuxer = MatroskaDemuxer::from_bytes(Bytes::from(mkv_bytes)).expect("Failed to demux MKV");
+        assert_eq!(demuxer.cues().len(), 1);
+        assert_eq!(demuxer.cues()[0].time_ticks, 0);
+
+        let pkt0 = demuxer.read_packet().unwrap().unwrap();
+        assert_eq!(pkt0.dts, 0);
+        assert!(pkt0.is_keyframe);
+
+        let pkt1 = demuxer.read_packet().unwrap().unwrap();
+        assert_eq!(pkt1.dts, 1000);
+        assert!(!pkt1.is_keyframe);
+
+        // Fast seeking back to keyframe
+        demuxer.seek_to_keyframe(0, 500).unwrap();
+        let pkt_seek = demuxer.read_packet().unwrap().unwrap();
+        assert_eq!(pkt_seek.dts, 0);
+        assert!(pkt_seek.is_keyframe);
     }
 }

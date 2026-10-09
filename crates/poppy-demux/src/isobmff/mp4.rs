@@ -80,7 +80,27 @@ impl Mp4Demuxer {
         };
 
         // 2. Parse tracks from `moov`
-        let tracks = parse_moov(moov_body, moov_offset)?;
+        let mut tracks = parse_moov(moov_body, moov_offset)?;
+
+        // 3. Scan for movie fragments (`moof`) across the container
+        for res in BoxIter::new(slice, 0) {
+            let (header, body, offset) = res?;
+            if &header.box_type == b"moof" {
+                let body_offset = offset + header.header_size as u64;
+                super::fragment::parse_moof(body, body_offset, &mut tracks)?;
+            }
+        }
+
+        // 4. Update track durations based on decoded samples
+        for t in &mut tracks {
+            if let Some(last) = t.sample_table.samples.last() {
+                let total_ticks = last.dts + last.duration as i64;
+                if t.duration_ticks.map(|d| total_ticks > d).unwrap_or(true) {
+                    t.duration_ticks = Some(total_ticks);
+                }
+            }
+        }
+
         let stream_infos: Vec<StreamInfo> = tracks
             .iter()
             .enumerate()
