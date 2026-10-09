@@ -27,3 +27,9 @@ name = "fuzz_h264_parse"
 path = "fuzz_targets/fuzz_h264_parse.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "fuzz_ebml"
+path = "fuzz_targets/fuzz_ebml.rs"
+test = false
+doc = false

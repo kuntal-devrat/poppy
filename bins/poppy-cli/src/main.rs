@@ -46,6 +46,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Commands::Probe { file } => {
             println!("🔍 Probing: {}", file.display());
+            let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+            let is_mkv = ext == "mkv" || ext == "webm";
+
+            if is_mkv {
+                let demuxer = poppy_demux::MatroskaDemuxer::open(&file)?;
+                let streams = demuxer.streams();
+                println!("📦 Container: Matroska / WebM ({} stream(s) found)\n", streams.len());
+
+                for stream in streams {
+                    println!("▶ Stream #{}:", stream.index);
+                    println!("  Codec:      {}", stream.codec);
+                    println!("  Timebase:   {}", stream.time_base);
+                    println!();
+                }
+                return Ok(());
+            }
+
             let demuxer = Mp4Demuxer::open(&file)?;
             let streams = demuxer.streams();
             let tracks = demuxer.tracks();

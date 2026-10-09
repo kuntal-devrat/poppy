@@ -10,8 +10,10 @@
 //! or streaming byte sources.
 
 pub mod bsf;
+pub mod ebml;
 pub mod isobmff;
 
+pub use ebml::MatroskaDemuxer;
 pub use isobmff::Mp4Demuxer;
 
 use poppy_core::{Packet, StreamInfo};

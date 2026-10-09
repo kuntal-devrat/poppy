@@ -1,6 +1,12 @@
 //! # poppy-render
 //!
-//! Zero-copy GPU interop bridges for Project Poppy.
+//! Zero-copy GPU interop bridges (DMA-BUF and texture abstractions) for Project Poppy.
+
+pub mod dmabuf;
+pub mod texture;
+
+pub use dmabuf::{DmaBufImage, DmaBufPlane};
+pub use texture::GpuTexture;
 
 /// Render errors.
 #[derive(Debug, thiserror::Error)]
