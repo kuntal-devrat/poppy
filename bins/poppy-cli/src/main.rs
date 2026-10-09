@@ -38,6 +38,15 @@ enum Commands {
         #[arg(short, long)]
         stream: Option<usize>,
     },
+    /// Decode video frames using GPU hardware acceleration (VA-API / DMA-BUF)
+    Decode {
+        /// Path to the media file
+        file: PathBuf,
+
+        /// Limit maximum number of frames to decode
+        #[arg(short, long)]
+        limit: Option<usize>,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -209,6 +218,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 total_bytes,
                 total_bytes as f64 / (1024.0 * 1024.0),
                 output.display()
+            );
+        }
+
+        Commands::Decode { file, limit } => {
+            println!("🚀 Initializing hardware decoding pipeline for: {}", file.display());
+            let mut stream = poppy::open(&file)?;
+            let mut frame_count = 0;
+            let start = std::time::Instant::now();
+
+            while let Some(frame) = stream.next_frame()? {
+                frame_count += 1;
+                if frame_count == 1 || frame_count % 30 == 0 {
+                    println!(
+                        "  [Frame #{:04}] PTS: {:?} | Format: {} | Size: {}x{}",
+                        frame_count,
+                        frame.pts,
+                        frame.pixel_format,
+                        frame.width,
+                        frame.height
+                    );
+                }
+                if let Some(max) = limit {
+                    if frame_count >= max {
+                        break;
+                    }
+                }
+            }
+
+            let elapsed = start.elapsed();
+            let fps = if elapsed.as_secs_f64() > 0.0 {
+                frame_count as f64 / elapsed.as_secs_f64()
+            } else {
+                0.0
+            };
+
+            println!(
+                "\n✨ Decoded {} frames in {:.2?} ({:.1} FPS) via GPU hardware accelerator",
+                frame_count, elapsed, fps
             );
         }
     }

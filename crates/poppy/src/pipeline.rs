@@ -63,7 +63,39 @@ impl MediaStream {
         // Attempt hardware decoder creation if video stream is H.264
         #[cfg(target_os = "linux")]
         let decoder: Option<Box<dyn HwDecoder>> = if stream_info.codec == CodecId::H264 {
-            VaapiH264Decoder::new().ok().map(|d| Box::new(d) as Box<dyn HwDecoder>)
+            if let Ok(mut dec) = VaapiH264Decoder::new() {
+                if let poppy_core::codec::CodecConfig::H264(avcc) = &stream_info.config {
+                    for sps in &avcc.sps_list {
+                        let mut data = vec![0, 0, 0, 1];
+                        data.extend_from_slice(sps);
+                        let pkt = Packet {
+                            stream_index: target_stream_index,
+                            pts: None,
+                            dts: 0,
+                            duration: 0,
+                            data: bytes::Bytes::from(data),
+                            is_keyframe: false,
+                        };
+                        let _ = dec.submit_packet(&pkt);
+                    }
+                    for pps in &avcc.pps_list {
+                        let mut data = vec![0, 0, 0, 1];
+                        data.extend_from_slice(pps);
+                        let pkt = Packet {
+                            stream_index: target_stream_index,
+                            pts: None,
+                            dts: 0,
+                            duration: 0,
+                            data: bytes::Bytes::from(data),
+                            is_keyframe: false,
+                        };
+                        let _ = dec.submit_packet(&pkt);
+                    }
+                }
+                Some(Box::new(dec) as Box<dyn HwDecoder>)
+            } else {
+                None
+            }
         } else {
             None
         };

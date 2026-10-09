@@ -81,7 +81,7 @@ impl<'a> Iterator for BoxIter<'a> {
                     header.size as usize
                 };
 
-                if box_size > remaining.len() {
+                if box_size < header.header_size as usize || box_size > remaining.len() {
                     return Some(Err(DemuxError::UnexpectedEof {
                         offset: current_offset,
                     }));
@@ -324,7 +324,7 @@ struct ParsedStsd {
     height: u32,
 }
 
-fn parse_stsd(data: &[u8], file_offset: u64, _handler_type: &[u8; 4]) -> Result<ParsedStsd, DemuxError> {
+fn parse_stsd(data: &[u8], file_offset: u64, handler_type: &[u8; 4]) -> Result<ParsedStsd, DemuxError> {
     if data.len() < 8 {
         return Err(DemuxError::InvalidBox {
             offset: file_offset,
@@ -356,16 +356,15 @@ fn parse_stsd(data: &[u8], file_offset: u64, _handler_type: &[u8; 4]) -> Result<
 
         if entry_size >= 8 && cursor + entry_size <= data.len() {
             let entry_payload = &data[cursor + 8..cursor + entry_size];
+            let is_video = handler_type == b"vide";
 
-            // If it's a visual entry (like avc1, hvc1, av01)
-            // VisualSampleEntry header has 70 bytes of fixed fields after entry size & fourcc
-            if entry_payload.len() >= 70 {
+            if is_video && entry_payload.len() >= 78 {
                 width = u16::from_be_bytes([entry_payload[24], entry_payload[25]]) as u32;
                 height = u16::from_be_bytes([entry_payload[26], entry_payload[27]]) as u32;
 
-                // Child boxes start at byte 70 of entry_payload
-                let child_boxes = &entry_payload[70..];
-                let child_offset = file_offset + (cursor + 8 + 70) as u64;
+                // Child boxes start at byte 78 of entry_payload (ISO 14496-12 §8.5.2.2)
+                let child_boxes = &entry_payload[78..];
+                let child_offset = file_offset + (cursor + 8 + 78) as u64;
 
                 for c_res in BoxIter::new(child_boxes, child_offset) {
                     if let Ok((c_header, c_body, _)) = c_res {

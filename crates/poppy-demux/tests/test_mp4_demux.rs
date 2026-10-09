@@ -64,9 +64,9 @@ fn test_mp4_demux_end_to_end() {
     let avcc_box = make_box(b"avcC", &avcc_payload);
 
     // avc1 box (VisualSampleEntry)
-    // 78 bytes total before child boxes:
+    // 78 bytes total after size & fourcc:
     // 6 reserved + 2 data_ref_idx + 16 pre_defined/reserved + 2 width + 2 height + 8 res + 4 res + 2 frame_count + 32 compressor + 2 depth + 2 pre_defined
-    let mut avc1_payload = vec![0u8; 70]; // 78 - 8 (size + fourcc) = 70 bytes
+    let mut avc1_payload = vec![0u8; 78];
     // width at offset 24..26 (1920)
     avc1_payload[24..26].copy_from_slice(&1920u16.to_be_bytes());
     // height at offset 26..28 (1080)
@@ -75,7 +75,7 @@ fn test_mp4_demux_end_to_end() {
     avc1_payload[28..32].copy_from_slice(&0x00480000u32.to_be_bytes());
     avc1_payload[32..36].copy_from_slice(&0x00480000u32.to_be_bytes());
     avc1_payload[40..42].copy_from_slice(&1u16.to_be_bytes()); // frame_count = 1
-    avc1_payload[74 - 8..76 - 8].copy_from_slice(&24u16.to_be_bytes()); // depth = 24
+    avc1_payload[74..76].copy_from_slice(&24u16.to_be_bytes()); // depth = 24
     avc1_payload.extend_from_slice(&avcc_box);
     let avc1_box = make_box(b"avc1", &avc1_payload);
 
