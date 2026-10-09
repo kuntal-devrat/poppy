@@ -1,0 +1,13 @@
+[package]
+name = "poppy-demux"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Pure safe-Rust container demuxers (MP4/ISOBMFF and MKV/EBML) for the Poppy media pipeline"
+
+[dependencies]
+poppy-core = { workspace = true }
+bytes = { workspace = true }
+thiserror = { workspace = true }
+memmap2 = { workspace = true }

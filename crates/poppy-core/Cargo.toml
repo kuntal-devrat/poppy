@@ -1,0 +1,11 @@
+[package]
+name = "poppy-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Foundational types for the Poppy media pipeline: packets, timestamps, codec configs"
+
+[dependencies]
+bytes = { workspace = true }
+thiserror = { workspace = true }

@@ -1,0 +1,16 @@
+[package]
+name = "poppy-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "CLI tool for inspecting media files and dumping streams using Poppy"
+
+[dependencies]
+poppy = { workspace = true }
+poppy-core = { workspace = true }
+poppy-demux = { workspace = true }
+poppy-h264 = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
