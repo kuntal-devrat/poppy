@@ -3,7 +3,7 @@
 //!
 //! Direct x86_64/Linux C ABI matching `<va/va.h>`, `<va/va_drm.h>`, and `<va/va_dec_h264.h>`.
 
-use std::ffi::{c_char, c_int, c_uint, c_void, CStr};
+use std::ffi::{CStr, c_char, c_int, c_uint, c_void};
 use std::sync::Arc;
 
 pub type VADisplay = *mut c_void;
@@ -26,6 +26,8 @@ pub const VA_PROFILE_H264_HIGH: VAProfile = 7;
 pub const VA_PROFILE_H264_CONSTRAINED_BASELINE: VAProfile = 21;
 pub const VA_PROFILE_HEVC_MAIN: VAProfile = 16;
 pub const VA_PROFILE_HEVC_MAIN10: VAProfile = 17;
+pub const VA_PROFILE_AV1_PROFILE0: VAProfile = 32;
+pub const VA_PROFILE_AV1_PROFILE1: VAProfile = 33;
 
 pub const VA_ENTRYPOINT_VLD: VAEntrypoint = 1;
 
@@ -265,16 +267,330 @@ impl Default for VASliceParameterBufferHEVC {
     }
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct VASegmentationStructAV1 {
+    pub segment_info_fields: u32,
+    pub feature_data: [[i16; 8]; 8],
+    pub feature_mask: [u8; 8],
+    pub va_reserved: [u32; 4],
+}
+
+impl Default for VASegmentationStructAV1 {
+    fn default() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct VAFilmGrainStructAV1 {
+    pub film_grain_info_fields: u32,
+    pub grain_seed: u16,
+    pub num_y_points: u8,
+    pub point_y_value: [u8; 14],
+    pub point_y_scaling: [u8; 14],
+    pub num_cb_points: u8,
+    pub point_cb_value: [u8; 10],
+    pub point_cb_scaling: [u8; 10],
+    pub num_cr_points: u8,
+    pub point_cr_value: [u8; 10],
+    pub point_cr_scaling: [u8; 10],
+    pub ar_coeffs_y: [i8; 24],
+    pub ar_coeffs_cb: [i8; 25],
+    pub ar_coeffs_cr: [i8; 25],
+    pub cb_mult: u8,
+    pub cb_luma_mult: u8,
+    pub cb_offset: u16,
+    pub cr_mult: u8,
+    pub cr_luma_mult: u8,
+    pub cr_offset: u16,
+    pub va_reserved: [u32; 4],
+}
+
+impl Default for VAFilmGrainStructAV1 {
+    fn default() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct VAWarpedMotionParamsAV1 {
+    pub wmtype: u32,
+    pub wmmat: [i32; 8],
+    pub invalid: u8,
+    pub pad: [u8; 3],
+    pub va_reserved: [u32; 4],
+}
+
+impl Default for VAWarpedMotionParamsAV1 {
+    fn default() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct VADecPictureParameterBufferAV1 {
+    pub profile: u8,
+    pub order_hint_bits_minus_1: u8,
+    pub bit_depth_idx: u8,
+    pub matrix_coefficients: u8,
+    pub seq_info_fields: u32,
+    pub current_frame: VASurfaceID,
+    pub current_display_picture: VASurfaceID,
+    pub anchor_frames_num: u8,
+    pub pad0: [u8; 7],
+    pub anchor_frames_list: *mut VASurfaceID,
+    pub frame_width_minus1: u16,
+    pub frame_height_minus1: u16,
+    pub output_frame_width_in_tiles_minus_1: u16,
+    pub output_frame_height_in_tiles_minus_1: u16,
+    pub ref_frame_map: [VASurfaceID; 8],
+    pub ref_frame_idx: [u8; 7],
+    pub primary_ref_frame: u8,
+    pub order_hint: u8,
+    pub pad1: [u8; 3],
+    pub seg_info: VASegmentationStructAV1,
+    pub film_grain_info: VAFilmGrainStructAV1,
+    pub tile_cols: u8,
+    pub tile_rows: u8,
+    pub width_in_sbs_minus_1: [u16; 63],
+    pub height_in_sbs_minus_1: [u16; 63],
+    pub tile_count_minus_1: u16,
+    pub context_update_tile_id: u16,
+    pub pic_info_fields: u32,
+    pub superres_scale_denominator: u8,
+    pub interp_filter: u8,
+    pub filter_level: [u8; 2],
+    pub filter_level_u: u8,
+    pub filter_level_v: u8,
+    pub loop_filter_info_fields: u8,
+    pub ref_deltas: [i8; 8],
+    pub mode_deltas: [i8; 2],
+    pub base_qindex: u8,
+    pub y_dc_delta_q: i8,
+    pub u_dc_delta_q: i8,
+    pub u_ac_delta_q: i8,
+    pub v_dc_delta_q: i8,
+    pub v_ac_delta_q: i8,
+    pub qmatrix_fields: u16,
+    pub mode_control_fields: u32,
+    pub cdef_damping_minus_3: u8,
+    pub cdef_bits: u8,
+    pub cdef_y_strengths: [u8; 8],
+    pub cdef_uv_strengths: [u8; 8],
+    pub loop_restoration_fields: u16,
+    pub wm: [VAWarpedMotionParamsAV1; 7],
+    pub va_reserved: [u32; 8],
+}
+
+impl Default for VADecPictureParameterBufferAV1 {
+    fn default() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct VASliceParameterBufferAV1 {
+    pub slice_data_size: u32,
+    pub slice_data_offset: u32,
+    pub slice_data_flag: u32,
+    pub tile_row: u16,
+    pub tile_column: u16,
+    pub tg_start: u16,
+    pub tg_end: u16,
+    pub anchor_frame_idx: u8,
+    pub pad: u8,
+    pub tile_idx_in_tile_list: u16,
+    pub va_reserved: [u32; 4],
+}
+
+impl Default for VASliceParameterBufferAV1 {
+    fn default() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_hevc_struct_sizes() {
-        println!("size_of VAPictureParameterBufferHEVC = {}", std::mem::size_of::<VAPictureParameterBufferHEVC>());
-        println!("size_of VASliceParameterBufferHEVC = {}", std::mem::size_of::<VASliceParameterBufferHEVC>());
         assert_eq!(std::mem::size_of::<VAPictureParameterBufferHEVC>(), 604);
         assert_eq!(std::mem::size_of::<VASliceParameterBufferHEVC>(), 264);
+    }
+
+    #[test]
+    fn test_av1_struct_sizes() {
+        use std::mem::offset_of;
+        assert_eq!(std::mem::size_of::<VASegmentationStructAV1>(), 156);
+        assert_eq!(std::mem::size_of::<VAFilmGrainStructAV1>(), 176);
+        assert_eq!(std::mem::size_of::<VAWarpedMotionParamsAV1>(), 56);
+        assert_eq!(std::mem::size_of::<VADecPictureParameterBufferAV1>(), 1160);
+        assert_eq!(std::mem::size_of::<VASliceParameterBufferAV1>(), 40);
+
+        assert_eq!(offset_of!(VADecPictureParameterBufferAV1, current_frame), 8);
+        assert_eq!(
+            offset_of!(VADecPictureParameterBufferAV1, current_display_picture),
+            12
+        );
+        assert_eq!(
+            offset_of!(VADecPictureParameterBufferAV1, anchor_frames_num),
+            16
+        );
+        assert_eq!(
+            offset_of!(VADecPictureParameterBufferAV1, anchor_frames_list),
+            24
+        );
+        assert_eq!(
+            offset_of!(VADecPictureParameterBufferAV1, frame_width_minus1),
+            32
+        );
+        assert_eq!(
+            offset_of!(VADecPictureParameterBufferAV1, frame_height_minus1),
+            34
+        );
+        assert_eq!(
+            offset_of!(
+                VADecPictureParameterBufferAV1,
+                output_frame_width_in_tiles_minus_1
+            ),
+            36
+        );
+        assert_eq!(
+            offset_of!(
+                VADecPictureParameterBufferAV1,
+                output_frame_height_in_tiles_minus_1
+            ),
+            38
+        );
+        assert_eq!(
+            offset_of!(VADecPictureParameterBufferAV1, ref_frame_map),
+            40
+        );
+        assert_eq!(
+            offset_of!(VADecPictureParameterBufferAV1, ref_frame_idx),
+            72
+        );
+        assert_eq!(
+            offset_of!(VADecPictureParameterBufferAV1, primary_ref_frame),
+            79
+        );
+        assert_eq!(offset_of!(VADecPictureParameterBufferAV1, order_hint), 80);
+        assert_eq!(offset_of!(VADecPictureParameterBufferAV1, seg_info), 84);
+        assert_eq!(
+            offset_of!(VADecPictureParameterBufferAV1, film_grain_info),
+            240
+        );
+        assert_eq!(offset_of!(VADecPictureParameterBufferAV1, tile_cols), 416);
+        assert_eq!(offset_of!(VADecPictureParameterBufferAV1, tile_rows), 417);
+        assert_eq!(
+            offset_of!(VADecPictureParameterBufferAV1, width_in_sbs_minus_1),
+            418
+        );
+        assert_eq!(
+            offset_of!(VADecPictureParameterBufferAV1, height_in_sbs_minus_1),
+            544
+        );
+        assert_eq!(
+            offset_of!(VADecPictureParameterBufferAV1, tile_count_minus_1),
+            670
+        );
+        assert_eq!(
+            offset_of!(VADecPictureParameterBufferAV1, context_update_tile_id),
+            672
+        );
+        assert_eq!(
+            offset_of!(VADecPictureParameterBufferAV1, pic_info_fields),
+            676
+        );
+        assert_eq!(
+            offset_of!(VADecPictureParameterBufferAV1, superres_scale_denominator),
+            680
+        );
+        assert_eq!(
+            offset_of!(VADecPictureParameterBufferAV1, interp_filter),
+            681
+        );
+        assert_eq!(
+            offset_of!(VADecPictureParameterBufferAV1, filter_level),
+            682
+        );
+        assert_eq!(
+            offset_of!(VADecPictureParameterBufferAV1, filter_level_u),
+            684
+        );
+        assert_eq!(
+            offset_of!(VADecPictureParameterBufferAV1, filter_level_v),
+            685
+        );
+        assert_eq!(
+            offset_of!(VADecPictureParameterBufferAV1, loop_filter_info_fields),
+            686
+        );
+        assert_eq!(offset_of!(VADecPictureParameterBufferAV1, ref_deltas), 687);
+        assert_eq!(offset_of!(VADecPictureParameterBufferAV1, mode_deltas), 695);
+        assert_eq!(offset_of!(VADecPictureParameterBufferAV1, base_qindex), 697);
+        assert_eq!(
+            offset_of!(VADecPictureParameterBufferAV1, y_dc_delta_q),
+            698
+        );
+        assert_eq!(
+            offset_of!(VADecPictureParameterBufferAV1, u_dc_delta_q),
+            699
+        );
+        assert_eq!(
+            offset_of!(VADecPictureParameterBufferAV1, u_ac_delta_q),
+            700
+        );
+        assert_eq!(
+            offset_of!(VADecPictureParameterBufferAV1, v_dc_delta_q),
+            701
+        );
+        assert_eq!(
+            offset_of!(VADecPictureParameterBufferAV1, v_ac_delta_q),
+            702
+        );
+        assert_eq!(
+            offset_of!(VADecPictureParameterBufferAV1, qmatrix_fields),
+            704
+        );
+        assert_eq!(
+            offset_of!(VADecPictureParameterBufferAV1, mode_control_fields),
+            708
+        );
+        assert_eq!(
+            offset_of!(VADecPictureParameterBufferAV1, cdef_damping_minus_3),
+            712
+        );
+        assert_eq!(offset_of!(VADecPictureParameterBufferAV1, cdef_bits), 713);
+        assert_eq!(
+            offset_of!(VADecPictureParameterBufferAV1, cdef_y_strengths),
+            714
+        );
+        assert_eq!(
+            offset_of!(VADecPictureParameterBufferAV1, cdef_uv_strengths),
+            722
+        );
+        assert_eq!(
+            offset_of!(VADecPictureParameterBufferAV1, loop_restoration_fields),
+            730
+        );
+        assert_eq!(offset_of!(VADecPictureParameterBufferAV1, wm), 732);
+        assert_eq!(
+            offset_of!(VADecPictureParameterBufferAV1, va_reserved),
+            1124
+        );
+
+        assert_eq!(offset_of!(VASliceParameterBufferAV1, slice_data_size), 0);
+        assert_eq!(offset_of!(VASliceParameterBufferAV1, slice_data_offset), 4);
+        assert_eq!(offset_of!(VASliceParameterBufferAV1, slice_data_flag), 8);
+        assert_eq!(offset_of!(VASliceParameterBufferAV1, tile_row), 12);
+        assert_eq!(offset_of!(VASliceParameterBufferAV1, tile_column), 14);
     }
 }
 
@@ -347,6 +663,7 @@ pub struct VAImageFormat {
     pub green_mask: u32,
     pub blue_mask: u32,
     pub alpha_mask: u32,
+    pub va_reserved: [u32; 4],
 }
 
 #[repr(C)]
@@ -355,14 +672,15 @@ pub struct VAImage {
     pub image_id: VAImageID,
     pub format: VAImageFormat,
     pub buf: VABufferID,
-    pub _va_reserved: [usize; 2],
     pub width: u16,
     pub height: u16,
     pub data_size: u32,
     pub num_planes: u32,
     pub pitches: [u32; 3],
     pub offsets: [u32; 3],
+    pub num_palette_entries: i32,
     pub entrypoint: i32,
+    pub _va_reserved: [u32; 4],
 }
 
 #[repr(C)]
@@ -384,26 +702,63 @@ pub struct VaApi {
     pub vaInitialize: unsafe extern "C" fn(VADisplay, *mut c_int, *mut c_int) -> VAStatus,
     pub vaTerminate: unsafe extern "C" fn(VADisplay) -> VAStatus,
     pub vaErrorStr: unsafe extern "C" fn(VAStatus) -> *const c_char,
-    pub vaQueryConfigProfiles: unsafe extern "C" fn(VADisplay, *mut VAProfile, *mut c_int) -> VAStatus,
+    pub vaQueryConfigProfiles:
+        unsafe extern "C" fn(VADisplay, *mut VAProfile, *mut c_int) -> VAStatus,
     pub vaMaxNumProfiles: unsafe extern "C" fn(VADisplay) -> c_int,
-    pub vaCreateConfig: unsafe extern "C" fn(VADisplay, VAProfile, VAEntrypoint, *mut c_void, c_uint, *mut VAConfigID) -> VAStatus,
+    pub vaCreateConfig: unsafe extern "C" fn(
+        VADisplay,
+        VAProfile,
+        VAEntrypoint,
+        *mut c_void,
+        c_uint,
+        *mut VAConfigID,
+    ) -> VAStatus,
     pub vaDestroyConfig: unsafe extern "C" fn(VADisplay, VAConfigID) -> VAStatus,
-    pub vaCreateSurfaces: unsafe extern "C" fn(VADisplay, c_uint, c_uint, c_uint, *mut VASurfaceID, c_uint, *mut c_void, c_uint) -> VAStatus,
+    pub vaCreateSurfaces: unsafe extern "C" fn(
+        VADisplay,
+        c_uint,
+        c_uint,
+        c_uint,
+        *mut VASurfaceID,
+        c_uint,
+        *mut c_void,
+        c_uint,
+    ) -> VAStatus,
     pub vaDestroySurfaces: unsafe extern "C" fn(VADisplay, *mut VASurfaceID, c_uint) -> VAStatus,
-    pub vaCreateContext: unsafe extern "C" fn(VADisplay, VAConfigID, c_int, c_int, c_int, *mut VASurfaceID, c_int, *mut VAContextID) -> VAStatus,
+    pub vaCreateContext: unsafe extern "C" fn(
+        VADisplay,
+        VAConfigID,
+        c_int,
+        c_int,
+        c_int,
+        *mut VASurfaceID,
+        c_int,
+        *mut VAContextID,
+    ) -> VAStatus,
     pub vaDestroyContext: unsafe extern "C" fn(VADisplay, VAContextID) -> VAStatus,
-    pub vaCreateBuffer: unsafe extern "C" fn(VADisplay, VAContextID, VABufferType, c_uint, c_uint, *mut c_void, *mut VABufferID) -> VAStatus,
+    pub vaCreateBuffer: unsafe extern "C" fn(
+        VADisplay,
+        VAContextID,
+        VABufferType,
+        c_uint,
+        c_uint,
+        *mut c_void,
+        *mut VABufferID,
+    ) -> VAStatus,
     pub vaDestroyBuffer: unsafe extern "C" fn(VADisplay, VABufferID) -> VAStatus,
     pub vaBeginPicture: unsafe extern "C" fn(VADisplay, VAContextID, VASurfaceID) -> VAStatus,
-    pub vaRenderPicture: unsafe extern "C" fn(VADisplay, VAContextID, *mut VABufferID, c_int) -> VAStatus,
+    pub vaRenderPicture:
+        unsafe extern "C" fn(VADisplay, VAContextID, *mut VABufferID, c_int) -> VAStatus,
     pub vaEndPicture: unsafe extern "C" fn(VADisplay, VAContextID) -> VAStatus,
     pub vaSyncSurface: unsafe extern "C" fn(VADisplay, VASurfaceID) -> VAStatus,
-    pub vaExportSurfaceHandle: unsafe extern "C" fn(VADisplay, VASurfaceID, c_uint, c_uint, *mut c_void) -> VAStatus,
+    pub vaExportSurfaceHandle:
+        unsafe extern "C" fn(VADisplay, VASurfaceID, c_uint, c_uint, *mut c_void) -> VAStatus,
     pub vaDeriveImage: unsafe extern "C" fn(VADisplay, VASurfaceID, *mut VAImage) -> VAStatus,
     pub vaDestroyImage: unsafe extern "C" fn(VADisplay, VAImageID) -> VAStatus,
     pub vaMapBuffer: unsafe extern "C" fn(VADisplay, VABufferID, *mut *mut c_void) -> VAStatus,
     pub vaUnmapBuffer: unsafe extern "C" fn(VADisplay, VABufferID) -> VAStatus,
-    pub vaAcquireBufferHandle: unsafe extern "C" fn(VADisplay, VABufferID, *mut VABufferInfo) -> VAStatus,
+    pub vaAcquireBufferHandle:
+        unsafe extern "C" fn(VADisplay, VABufferID, *mut VABufferInfo) -> VAStatus,
     pub vaReleaseBufferHandle: unsafe extern "C" fn(VADisplay, VABufferID) -> VAStatus,
 }
 
@@ -420,7 +775,8 @@ impl VaApi {
             }
 
             let lib_va_drm_name = b"libva-drm.so.2\0";
-            let lib_va_drm = libc::dlopen(lib_va_drm_name.as_ptr() as *const c_char, libc::RTLD_NOW);
+            let lib_va_drm =
+                libc::dlopen(lib_va_drm_name.as_ptr() as *const c_char, libc::RTLD_NOW);
             if lib_va_drm.is_null() {
                 libc::dlclose(lib_va);
                 return Err("Failed to load libva-drm.so.2 via dlopen".into());
@@ -432,7 +788,10 @@ impl VaApi {
                     if s.is_null() {
                         libc::dlclose(lib_va);
                         libc::dlclose(lib_va_drm);
-                        return Err(format!("Symbol not found: {}", CStr::from_ptr($name.as_ptr() as *const c_char).to_string_lossy()));
+                        return Err(format!(
+                            "Symbol not found: {}",
+                            CStr::from_ptr($name.as_ptr() as *const c_char).to_string_lossy()
+                        ));
                     }
                     std::mem::transmute(s)
                 }};

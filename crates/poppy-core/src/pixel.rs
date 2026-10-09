@@ -117,6 +117,34 @@ pub enum ColorSpace {
     Unspecified,
 }
 
+/// Interlacing structure of a video stream or frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum InterlaceMode {
+    /// Progressive frame (no interlacing).
+    #[default]
+    Progressive,
+    /// Interlaced frame with top field displayed first (TFF).
+    TopFieldFirst,
+    /// Interlaced frame with bottom field displayed first (BFF).
+    BottomFieldFirst,
+    /// Single field (top field).
+    TopField,
+    /// Single field (bottom field).
+    BottomField,
+}
+
+impl std::fmt::Display for InterlaceMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Progressive => write!(f, "Progressive"),
+            Self::TopFieldFirst => write!(f, "TopFieldFirst"),
+            Self::BottomFieldFirst => write!(f, "BottomFieldFirst"),
+            Self::TopField => write!(f, "TopField"),
+            Self::BottomField => write!(f, "BottomField"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

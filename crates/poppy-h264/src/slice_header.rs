@@ -3,7 +3,7 @@
 //! Implements ITU-T H.264 §7.3.3 to extract slice parameters required by
 //! hardware decoders (such as VA-API's `VASliceParameterBufferH264`).
 
-use crate::bitstream::{remove_emulation_prevention, BitReader, BitstreamError};
+use crate::bitstream::{BitReader, BitstreamError, remove_emulation_prevention};
 use crate::nal::NalUnitType;
 use crate::pps::Pps;
 use crate::sps::Sps;
@@ -66,9 +66,10 @@ pub struct SliceHeader {
 }
 
 impl SliceHeader {
-    /// Parse a slice header given its NAL unit type, payload, active SPS, and PPS.
+    /// Parse a slice header given its NAL unit type, nal_ref_idc, payload, active SPS, and PPS.
     pub fn parse(
         nal_unit_type: NalUnitType,
+        nal_ref_idc: u8,
         nal_payload: &[u8],
         sps: &Sps,
         pps: &Pps,
@@ -211,43 +212,46 @@ impl SliceHeader {
             }
         }
 
-        // dec_ref_pic_marking()
-        if nal_unit_type == NalUnitType::SliceIdr {
-            let _no_output_of_prior_pics_flag = r.read_bit()?;
-            let _long_term_reference_flag = r.read_bit()?;
-        } else {
-            let adaptive_ref_pic_marking_mode_flag = r.read_bit()?;
-            if adaptive_ref_pic_marking_mode_flag {
-                loop {
-                    let mmco = r.read_ue()?;
-                    if mmco == 0 {
-                        break;
-                    }
-                    match mmco {
-                        1 | 3 => {
-                            let _diff = r.read_ue()?;
-                            if mmco == 3 {
+        // dec_ref_pic_marking() (ITU-T H.264 §7.3.3: only present when nal_ref_idc != 0)
+        if nal_ref_idc != 0 {
+            if nal_unit_type == NalUnitType::SliceIdr {
+                let _no_output_of_prior_pics_flag = r.read_bit()?;
+                let _long_term_reference_flag = r.read_bit()?;
+            } else {
+                let adaptive_ref_pic_marking_mode_flag = r.read_bit()?;
+                if adaptive_ref_pic_marking_mode_flag {
+                    loop {
+                        let mmco = r.read_ue()?;
+                        if mmco == 0 {
+                            break;
+                        }
+                        match mmco {
+                            1 | 3 => {
+                                let _diff = r.read_ue()?;
+                                if mmco == 3 {
+                                    let _long_term_frame_idx = r.read_ue()?;
+                                }
+                            }
+                            2 => {
+                                let _long_term_pic_num = r.read_ue()?;
+                            }
+                            4 => {
+                                let _max_long_term = r.read_ue()?;
+                            }
+                            5 => {}
+                            6 => {
                                 let _long_term_frame_idx = r.read_ue()?;
                             }
+                            _ => break,
                         }
-                        2 => {
-                            let _long_term_pic_num = r.read_ue()?;
-                        }
-                        4 => {
-                            let _max_long_term = r.read_ue()?;
-                        }
-                        5 => {}
-                        6 => {
-                            let _long_term_frame_idx = r.read_ue()?;
-                        }
-                        _ => break,
                     }
                 }
             }
         }
 
         let mut cabac_init_idc = 0;
-        if pps.entropy_coding_mode_flag && slice_type != SliceType::I && slice_type != SliceType::Si {
+        if pps.entropy_coding_mode_flag && slice_type != SliceType::I && slice_type != SliceType::Si
+        {
             cabac_init_idc = r.read_ue()?;
         }
 

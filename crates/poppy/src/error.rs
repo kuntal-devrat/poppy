@@ -17,4 +17,10 @@ pub enum PoppyError {
 
     #[error("no streams found in media file")]
     NoStreams,
+
+    #[error("async channel closed or worker terminated: {0}")]
+    ChannelClosed(String),
+
+    #[error("seek failed: {0}")]
+    SeekFailed(String),
 }

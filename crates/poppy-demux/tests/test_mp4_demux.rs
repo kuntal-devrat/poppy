@@ -1,6 +1,6 @@
 use bytes::Bytes;
-use poppy_core::codec::CodecConfig;
 use poppy_core::CodecId;
+use poppy_core::codec::CodecConfig;
 use poppy_demux::{Demuxer, Mp4Demuxer};
 
 /// Helper to construct a box with 4-byte size and 4-byte FourCC.
@@ -49,15 +49,15 @@ fn test_mp4_demux_end_to_end() {
     // 3. Construct moov tree:
     // avcC box
     let avcc_payload = vec![
-        1,       // configurationVersion = 1
-        0x64,    // AVCProfileIndication (High = 100 = 0x64)
-        0x00,    // profile_compatibility
-        0x1F,    // AVCLevelIndication (3.1 = 31 = 0x1F)
-        0xFF,    // lengthSizeMinusOne | 0xFC = 3 | 0xFC = 0xFF -> 4 bytes length
-        0xE1,    // numOfSequenceParameterSets | 0xE0 = 1 | 0xE0 = 0xE1
+        1,    // configurationVersion = 1
+        0x64, // AVCProfileIndication (High = 100 = 0x64)
+        0x00, // profile_compatibility
+        0x1F, // AVCLevelIndication (3.1 = 31 = 0x1F)
+        0xFF, // lengthSizeMinusOne | 0xFC = 3 | 0xFC = 0xFF -> 4 bytes length
+        0xE1, // numOfSequenceParameterSets | 0xE0 = 1 | 0xE0 = 0xE1
         0x00, 4, // sps length = 4
         0x67, 0x64, 0x00, 0x1F, // sps bytes
-        1,       // numOfPictureParameterSets = 1
+        1,    // numOfPictureParameterSets = 1
         0x00, 3, // pps length = 3
         0x68, 0xEB, 0xE3, // pps bytes
     ];

@@ -1,9 +1,9 @@
 //! Video rendering and color conversion pipeline using `wgpu`.
 
-use std::sync::mpsc::sync_channel;
+use crate::RenderError;
 use poppy_core::PixelFormat;
 use poppy_hw::DecodedFrame;
-use crate::RenderError;
+use std::sync::mpsc::sync_channel;
 
 /// Color space and transfer function specification for video playback.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -33,10 +33,7 @@ impl ColorSpace {
     }
 
     pub fn is_full_range(&self) -> bool {
-        matches!(
-            self,
-            Self::Bt709Full | Self::Bt601Full | Self::Bt2020Full
-        )
+        matches!(self, Self::Bt709Full | Self::Bt601Full | Self::Bt2020Full)
     }
 }
 
@@ -60,7 +57,10 @@ pub struct VideoRenderPipeline {
 }
 
 impl VideoRenderPipeline {
-    pub fn new(device: &wgpu::Device, output_format: wgpu::TextureFormat) -> Result<Self, RenderError> {
+    pub fn new(
+        device: &wgpu::Device,
+        output_format: wgpu::TextureFormat,
+    ) -> Result<Self, RenderError> {
         let shader_src = include_str!("shader.wgsl");
         let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("poppy_color_convert_shader"),
@@ -211,7 +211,9 @@ impl GpuRenderer {
                 force_fallback_adapter: false,
             })
             .await
-            .ok_or_else(|| RenderError::AdapterNotFound("No compatible GPU adapter found".into()))?;
+            .ok_or_else(|| {
+                RenderError::AdapterNotFound("No compatible GPU adapter found".into())
+            })?;
 
         let supported_features = adapter.features();
         let mut required_features = wgpu::Features::empty();
@@ -248,6 +250,20 @@ impl GpuRenderer {
     /// Synchronously initializes a new GPU renderer instance.
     pub fn new_sync() -> Result<Self, RenderError> {
         pollster::block_on(Self::new())
+    }
+
+    /// Reconfigures the internal render pipeline for a specific window surface or texture format.
+    pub fn set_output_format(&mut self, format: wgpu::TextureFormat) -> Result<(), RenderError> {
+        if self.output_format != format {
+            self.pipeline = VideoRenderPipeline::new(&self.device, format)?;
+            self.output_format = format;
+        }
+        Ok(())
+    }
+
+    /// Current target output format.
+    pub fn output_format(&self) -> wgpu::TextureFormat {
+        self.output_format
     }
 
     /// Update the shader uniform buffer with the given color space.
@@ -381,9 +397,11 @@ impl GpuRenderer {
             ],
         });
 
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("poppy_render_encoder"),
-        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("poppy_render_encoder"),
+            });
 
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -453,9 +471,9 @@ impl GpuRenderer {
         self.read_texture_rgba(&target_texture, width, height)
     }
 
-    /// Renders a P010 (10-bit HDR) frame directly into RGBA8 bytes.
+    /// Renders a P010 (10-bit HDR) frame directly into an arbitrary target texture view.
     #[allow(clippy::too_many_arguments)]
-    pub fn render_p010_to_rgba(
+    pub fn render_p010_to_view(
         &self,
         y_plane: &[u16],
         uv_plane: &[u16],
@@ -464,8 +482,13 @@ impl GpuRenderer {
         stride_y: u32,
         stride_uv: u32,
         color_space: ColorSpace,
-    ) -> Result<Vec<u8>, RenderError> {
-        if !self.device.features().contains(wgpu::Features::TEXTURE_FORMAT_16BIT_NORM) {
+        target_view: &wgpu::TextureView,
+    ) -> Result<(), RenderError> {
+        if !self
+            .device
+            .features()
+            .contains(wgpu::Features::TEXTURE_FORMAT_16BIT_NORM)
+        {
             return Err(RenderError::UnsupportedFormat(
                 "GPU device lacks TEXTURE_FORMAT_16BIT_NORM feature for P010 rendering".into(),
             ));
@@ -549,22 +572,6 @@ impl GpuRenderer {
             },
         );
 
-        let target_texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("poppy_target_rgba_texture"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: self.output_format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-
-        let target_view = target_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let y_view = y_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let uv_view = uv_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
@@ -591,15 +598,17 @@ impl GpuRenderer {
             ],
         });
 
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("poppy_p010_render_encoder"),
-        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("poppy_p010_render_encoder"),
+            });
 
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("poppy_p010_render_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &target_view,
+                    view: target_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -617,22 +626,85 @@ impl GpuRenderer {
         }
 
         self.queue.submit(Some(encoder.finish()));
+        Ok(())
+    }
+
+    /// Renders a P010 (10-bit HDR) frame directly into RGBA8 bytes.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_p010_to_rgba(
+        &self,
+        y_plane: &[u16],
+        uv_plane: &[u16],
+        width: u32,
+        height: u32,
+        stride_y: u32,
+        stride_uv: u32,
+        color_space: ColorSpace,
+    ) -> Result<Vec<u8>, RenderError> {
+        let target_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("poppy_target_rgba_texture"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.output_format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+
+        let target_view = target_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.render_p010_to_view(
+            y_plane,
+            uv_plane,
+            width,
+            height,
+            stride_y,
+            stride_uv,
+            color_space,
+            &target_view,
+        )?;
         self.read_texture_rgba(&target_texture, width, height)
     }
 
     /// Converts a generic decoded frame into RGBA8 pixels using GPU acceleration.
     pub fn render_frame(&self, frame: &DecodedFrame) -> Result<Vec<u8>, RenderError> {
-        let data = frame
-            .data
-            .as_ref()
-            .ok_or_else(|| RenderError::UnsupportedFormat("DecodedFrame has no raw data buffer".into()))?;
+        if frame.dmabuf.is_some() || frame.dxgi_handle.is_some() || frame.cv_pixel_buffer.is_some()
+        {
+            let target_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("poppy_zerocopy_readback_texture"),
+                size: wgpu::Extent3d {
+                    width: frame.width,
+                    height: frame.height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: self.output_format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let target_view = target_texture.create_view(&wgpu::TextureViewDescriptor::default());
+            self.render_frame_to_view(frame, &target_view)?;
+            return self.read_texture_rgba(&target_texture, frame.width, frame.height);
+        }
+
+        let data = frame.data.as_ref().ok_or_else(|| {
+            RenderError::UnsupportedFormat("DecodedFrame has no raw data buffer".into())
+        })?;
 
         match frame.pixel_format {
             PixelFormat::Nv12 => {
                 let y_size = (frame.width * frame.height) as usize;
                 let uv_size = (frame.width * frame.height.div_ceil(2)) as usize;
                 if data.len() < y_size + uv_size {
-                    return Err(RenderError::UnsupportedFormat("Frame data buffer too small for NV12".into()));
+                    return Err(RenderError::UnsupportedFormat(
+                        "Frame data buffer too small for NV12".into(),
+                    ));
                 }
                 let y_plane = &data[..y_size];
                 let uv_plane = &data[y_size..y_size + uv_size];
@@ -652,7 +724,9 @@ impl GpuRenderer {
                 let uv_len = (frame.width * frame.height.div_ceil(2)) as usize;
                 let u16_slice: &[u16] = bytemuck::cast_slice(data);
                 if u16_slice.len() < y_len + uv_len {
-                    return Err(RenderError::UnsupportedFormat("Frame data buffer too small for P010".into()));
+                    return Err(RenderError::UnsupportedFormat(
+                        "Frame data buffer too small for P010".into(),
+                    ));
                 }
                 let y_plane = &u16_slice[..y_len];
                 let uv_plane = &u16_slice[y_len..y_len + uv_len];
@@ -667,7 +741,212 @@ impl GpuRenderer {
                     ColorSpace::Bt2020Limited,
                 )
             }
-            _ => Err(RenderError::UnsupportedFormat(format!("{:?}", frame.pixel_format))),
+            _ => Err(RenderError::UnsupportedFormat(format!(
+                "{:?}",
+                frame.pixel_format
+            ))),
+        }
+    }
+
+    /// Renders imported zero-copy planar textures directly into a target texture view.
+    pub fn render_textures_to_view(
+        &self,
+        y_texture: &wgpu::Texture,
+        uv_texture: &wgpu::Texture,
+        color_space: ColorSpace,
+        is_p010: bool,
+        target_view: &wgpu::TextureView,
+    ) -> Result<(), RenderError> {
+        self.update_uniform(color_space);
+
+        let y_view = y_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let uv_view = uv_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("poppy_zerocopy_bind_group"),
+            layout: &self.pipeline.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&y_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&uv_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.pipeline.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.pipeline.uniform_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("poppy_zerocopy_render_encoder"),
+            });
+
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("poppy_zerocopy_render_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            let pipeline = if is_p010 {
+                &self.pipeline.pipeline_p010
+            } else {
+                &self.pipeline.pipeline_nv12
+            };
+            render_pass.set_pipeline(pipeline);
+            render_pass.set_bind_group(0, &bind_group, &[]);
+            render_pass.draw(0..3, 0..1);
+        }
+
+        self.queue.submit(Some(encoder.finish()));
+        Ok(())
+    }
+
+    /// Renders a decoded frame directly to an arbitrary target texture view (such as a window surface texture).
+    ///
+    /// If the frame is backed by an exported Linux DRM PRIME DMA-BUF descriptor, it will be directly imported
+    /// into Vulkan with ZERO intermediate CPU staging copies.
+    pub fn render_frame_to_view(
+        &self,
+        frame: &DecodedFrame,
+        target_view: &wgpu::TextureView,
+    ) -> Result<(), RenderError> {
+        // 1. Direct Vulkan Zero-Copy DMA-BUF PRIME path (Linux)
+        if let Some(ref dmabuf_desc) = frame.dmabuf
+            && let Ok(imported) = crate::dmabuf::import_dmabuf_zero_copy(
+                &self.device,
+                dmabuf_desc,
+                frame.pixel_format,
+            )
+        {
+            let color_space = match frame.pixel_format {
+                PixelFormat::P010 => ColorSpace::Bt2020Limited,
+                _ => ColorSpace::Bt709Limited,
+            };
+            return self.render_textures_to_view(
+                &imported.y_texture,
+                &imported.uv_texture,
+                color_space,
+                frame.pixel_format == PixelFormat::P010,
+                target_view,
+            );
+        }
+
+        // 2. Direct Windows DXGI Shared Handle Zero-Copy path (Direct3D 12)
+        if let Some(ref dxgi_desc) = frame.dxgi_handle
+            && let Ok(imported) =
+                crate::dxgi::import_dxgi_zero_copy(&self.device, dxgi_desc, frame.pixel_format)
+        {
+            let color_space = match frame.pixel_format {
+                PixelFormat::P010 => ColorSpace::Bt2020Limited,
+                _ => ColorSpace::Bt709Limited,
+            };
+            return self.render_textures_to_view(
+                &imported.y_texture,
+                &imported.uv_texture,
+                color_space,
+                frame.pixel_format == PixelFormat::P010,
+                target_view,
+            );
+        }
+
+        // 3. Direct macOS VideoToolbox CVPixelBuffer / IOSurface Zero-Copy path (Metal)
+        if let Some(ref cv_desc) = frame.cv_pixel_buffer
+            && let Ok(imported) = crate::metal::import_cv_pixel_buffer_zero_copy(
+                &self.device,
+                cv_desc,
+                frame.pixel_format,
+            )
+        {
+            let color_space = match frame.pixel_format {
+                PixelFormat::P010 => ColorSpace::Bt2020Limited,
+                _ => ColorSpace::Bt709Limited,
+            };
+            return self.render_textures_to_view(
+                &imported.y_texture,
+                &imported.uv_texture,
+                color_space,
+                frame.pixel_format == PixelFormat::P010,
+                target_view,
+            );
+        }
+
+        let data = frame.data.as_ref().ok_or_else(|| {
+            RenderError::UnsupportedFormat(
+                "DecodedFrame has no raw data buffer and hardware zero-copy import unavailable"
+                    .into(),
+            )
+        })?;
+
+        match frame.pixel_format {
+            PixelFormat::Nv12 => {
+                let y_size = (frame.width * frame.height) as usize;
+                let uv_size = (frame.width * frame.height.div_ceil(2)) as usize;
+                if data.len() < y_size + uv_size {
+                    return Err(RenderError::UnsupportedFormat(
+                        "Frame data buffer too small for NV12".into(),
+                    ));
+                }
+                let y_plane = &data[..y_size];
+                let uv_plane = &data[y_size..y_size + uv_size];
+
+                self.render_nv12_to_view(
+                    y_plane,
+                    uv_plane,
+                    frame.width,
+                    frame.height,
+                    frame.width,
+                    frame.width,
+                    ColorSpace::Bt709Limited,
+                    target_view,
+                )
+            }
+            PixelFormat::P010 => {
+                let y_len = (frame.width * frame.height) as usize;
+                let uv_len = (frame.width * frame.height.div_ceil(2)) as usize;
+                let u16_slice: &[u16] = bytemuck::cast_slice(data);
+                if u16_slice.len() < y_len + uv_len {
+                    return Err(RenderError::UnsupportedFormat(
+                        "Frame data buffer too small for P010".into(),
+                    ));
+                }
+                let y_plane = &u16_slice[..y_len];
+                let uv_plane = &u16_slice[y_len..y_len + uv_len];
+
+                self.render_p010_to_view(
+                    y_plane,
+                    uv_plane,
+                    frame.width,
+                    frame.height,
+                    frame.width,
+                    frame.width,
+                    ColorSpace::Bt2020Limited,
+                    target_view,
+                )
+            }
+            _ => Err(RenderError::UnsupportedFormat(format!(
+                "{:?}",
+                frame.pixel_format
+            ))),
         }
     }
 
@@ -690,9 +969,11 @@ impl GpuRenderer {
             mapped_at_creation: false,
         });
 
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("poppy_readback_encoder"),
-        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("poppy_readback_encoder"),
+            });
 
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {

@@ -4,6 +4,7 @@
 //! and §8.2.4 (reference picture list construction for P- and B-slices).
 
 use super::ffi::*;
+use poppy_core::InterlaceMode;
 
 /// A frame stored in the Decoded Picture Buffer.
 #[derive(Debug, Clone)]
@@ -15,6 +16,28 @@ pub struct DpbFrame {
     pub is_long_term: bool,
     pub pts: Option<i64>,
     pub needed_for_output: bool,
+    pub width: u32,
+    pub height: u32,
+    pub interlace_mode: InterlaceMode,
+    pub is_concealed: bool,
+}
+
+impl Default for DpbFrame {
+    fn default() -> Self {
+        Self {
+            surface_id: 0,
+            frame_num: 0,
+            poc: 0,
+            is_reference: false,
+            is_long_term: false,
+            pts: None,
+            needed_for_output: false,
+            width: 1920,
+            height: 1080,
+            interlace_mode: InterlaceMode::Progressive,
+            is_concealed: false,
+        }
+    }
 }
 
 /// The Decoded Picture Buffer manager.
@@ -40,6 +63,11 @@ impl Dpb {
             max_reorder_frames: max_reorder_frames.max(1),
             frames: Vec::new(),
         }
+    }
+
+    /// Clear all frames and references from DPB immediately.
+    pub fn clear(&mut self) {
+        self.frames.clear();
     }
 
     /// Clear all references on IDR frame and bump any un-outputted frames in POC order.
@@ -100,7 +128,8 @@ impl Dpb {
         }
 
         // 3. Cleanup: remove frames that are no longer reference and already outputted
-        self.frames.retain(|f| f.is_reference || f.needed_for_output);
+        self.frames
+            .retain(|f| f.is_reference || f.needed_for_output);
 
         output_frames
     }
@@ -237,6 +266,7 @@ mod tests {
             is_long_term: false,
             pts: Some(0),
             needed_for_output: true,
+            ..Default::default()
         });
         assert_eq!(out0.len(), 0);
 
@@ -248,6 +278,7 @@ mod tests {
             is_long_term: false,
             pts: Some(40),
             needed_for_output: true,
+            ..Default::default()
         });
         assert_eq!(out1.len(), 0);
 
@@ -260,6 +291,7 @@ mod tests {
             is_long_term: false,
             pts: Some(20),
             needed_for_output: true,
+            ..Default::default()
         });
         assert_eq!(out2.len(), 1);
         assert_eq!(out2[0].poc, 0); // Smallest POC (0) is bumped first!
@@ -283,6 +315,7 @@ mod tests {
             is_long_term: false,
             pts: None,
             needed_for_output: false,
+            ..Default::default()
         });
         dpb.insert(DpbFrame {
             surface_id: 2,
@@ -292,6 +325,7 @@ mod tests {
             is_long_term: false,
             pts: None,
             needed_for_output: false,
+            ..Default::default()
         });
 
         assert_eq!(dpb.frames.iter().filter(|f| f.is_reference).count(), 2);
@@ -305,9 +339,14 @@ mod tests {
             is_long_term: false,
             pts: None,
             needed_for_output: false,
+            ..Default::default()
         });
 
         assert_eq!(dpb.frames.iter().filter(|f| f.is_reference).count(), 2);
-        assert!(!dpb.frames.iter().any(|f| f.surface_id == 1 && f.is_reference));
+        assert!(
+            !dpb.frames
+                .iter()
+                .any(|f| f.surface_id == 1 && f.is_reference)
+        );
     }
 }

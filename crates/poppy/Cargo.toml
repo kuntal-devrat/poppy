@@ -4,16 +4,24 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "High-level ergonomic API facade for the Poppy media pipeline"
+description = "High-level ergonomic API facade and C ABI shared library (libpoppy) for the Poppy media pipeline"
+
+[lib]
+name = "poppy"
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 poppy-core = { workspace = true }
 poppy-demux = { workspace = true }
 poppy-h264 = { workspace = true }
 poppy-hevc = { workspace = true }
+poppy-av1 = { workspace = true }
 poppy-hw = { workspace = true }
 poppy-render = { workspace = true }
 bytes = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+futures-core = { workspace = true }
+futures-util = { workspace = true }
+libc = { workspace = true }

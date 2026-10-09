@@ -13,7 +13,9 @@ pub enum BsfError {
     #[error("unsupported NAL length size: {0} (must be 1, 2, or 4)")]
     UnsupportedNalLengthSize(u8),
 
-    #[error("truncated NAL unit: expected {expected} bytes at offset {offset}, but only {available} available")]
+    #[error(
+        "truncated NAL unit: expected {expected} bytes at offset {offset}, but only {available} available"
+    )]
     TruncatedNal {
         offset: usize,
         expected: usize,
@@ -49,9 +51,7 @@ pub fn avcc_to_annex_b(
     let nls = nal_length_size as usize;
 
     // Estimate capacity to reduce reallocations
-    let param_sets_len: usize = param_sets.map_or(0, |ps| {
-        ps.iter().map(|s| 4 + s.len()).sum()
-    });
+    let param_sets_len: usize = param_sets.map_or(0, |ps| ps.iter().map(|s| 4 + s.len()).sum());
     output.reserve(param_sets_len + data.len() + 32);
 
     // If parameter sets are provided (e.g. on keyframe), emit them first with 4-byte start codes

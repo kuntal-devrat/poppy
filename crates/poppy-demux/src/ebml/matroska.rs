@@ -4,10 +4,10 @@ use std::fs::File;
 use std::path::Path;
 
 use bytes::Bytes;
-use poppy_core::codec::{AvcCRecord, CodecConfig, CodecId, HvcCRecord};
+use poppy_core::codec::{AudioConfig, Av1CRecord, AvcCRecord, CodecConfig, CodecId, HvcCRecord};
 use poppy_core::{Packet, StreamInfo, TimeBase};
 
-use super::element::{read_uint, read_utf8, EbmlIter};
+use super::element::{EbmlIter, read_uint, read_utf8};
 use super::vint::read_vint_id;
 use crate::{DemuxError, Demuxer};
 
@@ -26,6 +26,10 @@ pub const ID_CODEC_PRIVATE: u32 = 0x63A2;
 pub const ID_VIDEO_SETTINGS: u32 = 0xE0;
 pub const ID_PIXEL_WIDTH: u32 = 0xB0;
 pub const ID_PIXEL_HEIGHT: u32 = 0xBA;
+pub const ID_AUDIO_SETTINGS: u32 = 0xE1;
+pub const ID_SAMPLING_FREQUENCY: u32 = 0xB5;
+pub const ID_CHANNELS: u32 = 0x9F;
+pub const ID_BIT_DEPTH: u32 = 0x6264;
 pub const ID_CLUSTER: u32 = 0x1F43B675;
 pub const ID_CLUSTER_TIMESTAMP: u32 = 0xE7;
 pub const ID_SIMPLE_BLOCK: u32 = 0xA3;
@@ -114,19 +118,15 @@ impl MatroskaDemuxer {
 
         // 1. Verify EBML header
         let mut iter = EbmlIter::new(data, 0);
-        let header_elem = iter
-            .next()
-            .ok_or(DemuxError::UnsupportedFormat)??;
+        let header_elem = iter.next().ok_or(DemuxError::UnsupportedFormat)??;
         if header_elem.id != ID_EBML_HEADER {
             return Err(DemuxError::UnsupportedFormat);
         }
 
         // 2. Find Segment element
-        let segment_elem = iter
-            .next()
-            .ok_or(DemuxError::BoxNotFound {
-                fourcc: "Segment".into(),
-            })??;
+        let segment_elem = iter.next().ok_or(DemuxError::BoxNotFound {
+            fourcc: "Segment".into(),
+        })??;
         if segment_elem.id != ID_SEGMENT {
             return Err(DemuxError::UnsupportedFormat);
         }
@@ -159,6 +159,11 @@ impl MatroskaDemuxer {
                             let mut width = 0;
                             let mut height = 0;
 
+                            let mut audio_channels = 2u16;
+                            let mut audio_sample_rate = 48000u32;
+                            let mut audio_bit_depth = 16u16;
+                            let mut codec_private_raw: Option<Bytes> = None;
+
                             for entry_res in EbmlIter::new(track_elem.payload, track_elem.offset) {
                                 let entry_elem = entry_res?;
                                 match entry_elem.id {
@@ -168,22 +173,92 @@ impl MatroskaDemuxer {
                                     ID_CODEC_PRIVATE => {
                                         if let Ok(avcc) = AvcCRecord::parse(entry_elem.payload) {
                                             codec_config = CodecConfig::H264(avcc);
-                                        } else if let Ok(hvcc) = HvcCRecord::parse(entry_elem.payload) {
+                                        } else if let Ok(hvcc) =
+                                            HvcCRecord::parse(entry_elem.payload)
+                                        {
                                             codec_config = CodecConfig::Hevc(hvcc);
+                                        } else if let Ok(av1c) =
+                                            Av1CRecord::parse(entry_elem.payload)
+                                        {
+                                            codec_config = CodecConfig::Av1(av1c);
+                                        } else {
+                                            codec_private_raw =
+                                                Some(Bytes::copy_from_slice(entry_elem.payload));
                                         }
                                     }
                                     ID_VIDEO_SETTINGS => {
-                                        for v_res in EbmlIter::new(entry_elem.payload, entry_elem.offset) {
+                                        for v_res in
+                                            EbmlIter::new(entry_elem.payload, entry_elem.offset)
+                                        {
                                             let v_elem = v_res?;
                                             match v_elem.id {
-                                                ID_PIXEL_WIDTH => width = read_uint(v_elem.payload) as u32,
-                                                ID_PIXEL_HEIGHT => height = read_uint(v_elem.payload) as u32,
+                                                ID_PIXEL_WIDTH => {
+                                                    width = read_uint(v_elem.payload) as u32
+                                                }
+                                                ID_PIXEL_HEIGHT => {
+                                                    height = read_uint(v_elem.payload) as u32
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                    }
+                                    ID_AUDIO_SETTINGS => {
+                                        for a_res in
+                                            EbmlIter::new(entry_elem.payload, entry_elem.offset)
+                                        {
+                                            let a_elem = a_res?;
+                                            match a_elem.id {
+                                                ID_CHANNELS => {
+                                                    audio_channels =
+                                                        read_uint(a_elem.payload) as u16
+                                                }
+                                                ID_SAMPLING_FREQUENCY => {
+                                                    let f = if a_elem.payload.len() == 4 {
+                                                        f32::from_be_bytes([
+                                                            a_elem.payload[0],
+                                                            a_elem.payload[1],
+                                                            a_elem.payload[2],
+                                                            a_elem.payload[3],
+                                                        ])
+                                                            as u32
+                                                    } else if a_elem.payload.len() == 8 {
+                                                        f64::from_be_bytes([
+                                                            a_elem.payload[0],
+                                                            a_elem.payload[1],
+                                                            a_elem.payload[2],
+                                                            a_elem.payload[3],
+                                                            a_elem.payload[4],
+                                                            a_elem.payload[5],
+                                                            a_elem.payload[6],
+                                                            a_elem.payload[7],
+                                                        ])
+                                                            as u32
+                                                    } else {
+                                                        read_uint(a_elem.payload) as u32
+                                                    };
+                                                    if f > 0 {
+                                                        audio_sample_rate = f;
+                                                    }
+                                                }
+                                                ID_BIT_DEPTH => {
+                                                    audio_bit_depth =
+                                                        read_uint(a_elem.payload) as u16
+                                                }
                                                 _ => {}
                                             }
                                         }
                                     }
                                     _ => {}
                                 }
+                            }
+
+                            if track_type == 2 {
+                                codec_config = CodecConfig::Audio(AudioConfig {
+                                    sample_rate: audio_sample_rate,
+                                    channels: audio_channels,
+                                    bits_per_sample: audio_bit_depth,
+                                    extradata: codec_private_raw,
+                                });
                             }
 
                             let codec_id = CodecId::from_matroska_codec_id(&codec_str);
@@ -216,11 +291,17 @@ impl MatroskaDemuxer {
                                 if block_data.len() < trk_len + 3 {
                                     continue;
                                 }
-                                let rel_time = i16::from_be_bytes([block_data[trk_len], block_data[trk_len + 1]]) as i64;
+                                let rel_time = i16::from_be_bytes([
+                                    block_data[trk_len],
+                                    block_data[trk_len + 1],
+                                ]) as i64;
                                 let flags = block_data[trk_len + 2];
                                 let is_keyframe = (flags & 0x80) != 0;
 
-                                let payload_start = (c_elem.payload.as_ptr() as usize - data.as_ptr() as usize) + trk_len + 3;
+                                let payload_start = (c_elem.payload.as_ptr() as usize
+                                    - data.as_ptr() as usize)
+                                    + trk_len
+                                    + 3;
                                 let payload_len = block_data.len() - (trk_len + 3);
 
                                 samples.push(MatroskaSample {
@@ -246,10 +327,14 @@ impl MatroskaDemuxer {
                                 match cp_elem.id {
                                     ID_CUE_TIME => cue_time = read_uint(cp_elem.payload),
                                     ID_CUE_TRACK_POSITIONS => {
-                                        for pos_res in EbmlIter::new(cp_elem.payload, cp_elem.offset) {
+                                        for pos_res in
+                                            EbmlIter::new(cp_elem.payload, cp_elem.offset)
+                                        {
                                             let pos_elem = pos_res?;
                                             match pos_elem.id {
-                                                ID_CUE_TRACK => cue_track = read_uint(pos_elem.payload),
+                                                ID_CUE_TRACK => {
+                                                    cue_track = read_uint(pos_elem.payload)
+                                                }
                                                 ID_CUE_CLUSTER_POSITION => {
                                                     cluster_pos = read_uint(pos_elem.payload);
                                                 }
@@ -337,21 +422,37 @@ impl Demuxer for MatroskaDemuxer {
     }
 
     fn seek_to_keyframe(&mut self, stream_index: usize, timestamp: i64) -> Result<(), DemuxError> {
-        let track_num = self.tracks.get(stream_index).map(|t| t.track_num).unwrap_or(1);
+        let track_num = self
+            .tracks
+            .get(stream_index)
+            .map(|t| t.track_num)
+            .unwrap_or(1);
 
         // Fast O(log N) binary search: find first sample with timestamp > requested timestamp
-        let upper = self.samples.partition_point(|s| s.timestamp_ticks <= timestamp);
-        let mut target_idx = 0;
+        let upper = self
+            .samples
+            .partition_point(|s| s.timestamp_ticks <= timestamp);
+        let mut target_idx = None;
 
         // Scan backwards from upper bound to find nearest keyframe for this track
         for i in (0..upper).rev() {
             if self.samples[i].track_num == track_num && self.samples[i].is_keyframe {
-                target_idx = i;
+                target_idx = Some(i);
                 break;
             }
         }
 
-        self.cursor = target_idx;
+        // If requested timestamp precedes the first keyframe of this track, fallback to its first available keyframe
+        if target_idx.is_none() {
+            for (i, s) in self.samples.iter().enumerate() {
+                if s.track_num == track_num && s.is_keyframe {
+                    target_idx = Some(i);
+                    break;
+                }
+            }
+        }
+
+        self.cursor = target_idx.unwrap_or(0);
         Ok(())
     }
 }
@@ -385,14 +486,16 @@ mod tests {
     fn test_matroska_cues_and_seeking() {
         let ebml_hdr = make_ebml_master(ID_EBML_HEADER, &[]);
 
-        let track_entry = make_ebml_master(ID_TRACK_ENTRY, &[
-            // TrackNumber = 1
-            0xD7, 0x81, 0x01,
-            // TrackType = 1 (video)
-            0x83, 0x81, 0x01,
-            // CodecID = "V_MPEG4/ISO/AVC"
-            0x86, 0x8F, b'V', b'_', b'M', b'P', b'E', b'G', b'4', b'/', b'I', b'S', b'O', b'/', b'A', b'V', b'C',
-        ]);
+        let track_entry = make_ebml_master(
+            ID_TRACK_ENTRY,
+            &[
+                // TrackNumber = 1
+                0xD7, 0x81, 0x01, // TrackType = 1 (video)
+                0x83, 0x81, 0x01, // CodecID = "V_MPEG4/ISO/AVC"
+                0x86, 0x8F, b'V', b'_', b'M', b'P', b'E', b'G', b'4', b'/', b'I', b'S', b'O', b'/',
+                b'A', b'V', b'C',
+            ],
+        );
         let tracks_elem = make_ebml_master(ID_TRACKS, &track_entry);
 
         // Cluster 0 at time 0
@@ -405,10 +508,13 @@ mod tests {
         let cluster_elem = make_ebml_master(ID_CLUSTER, &cluster_payload);
 
         // Cues: CuePoint time 0
-        let cue_track_pos = make_ebml_master(ID_CUE_TRACK_POSITIONS, &[
-            0xF7, 0x81, 0x01, // CueTrack = 1
-            0xF1, 0x81, 0x50, // CueClusterPosition = 0x50
-        ]);
+        let cue_track_pos = make_ebml_master(
+            ID_CUE_TRACK_POSITIONS,
+            &[
+                0xF7, 0x81, 0x01, // CueTrack = 1
+                0xF1, 0x81, 0x50, // CueClusterPosition = 0x50
+            ],
+        );
         let mut cue_point_payload = Vec::new();
         cue_point_payload.extend_from_slice(&[0xB3, 0x81, 0x00]); // CueTime = 0
         cue_point_payload.extend_from_slice(&cue_track_pos);
@@ -425,7 +531,8 @@ mod tests {
         mkv_bytes.extend_from_slice(&ebml_hdr);
         mkv_bytes.extend_from_slice(&seg_elem);
 
-        let mut demuxer = MatroskaDemuxer::from_bytes(Bytes::from(mkv_bytes)).expect("Failed to demux MKV");
+        let mut demuxer =
+            MatroskaDemuxer::from_bytes(Bytes::from(mkv_bytes)).expect("Failed to demux MKV");
         assert_eq!(demuxer.cues().len(), 1);
         assert_eq!(demuxer.cues()[0].time_ticks, 0);
 

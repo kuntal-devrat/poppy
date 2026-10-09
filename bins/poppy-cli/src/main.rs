@@ -7,11 +7,13 @@ use poppy_core::codec::CodecConfig;
 use poppy_demux::bsf::{avcc_to_annex_b, hevc_to_annex_b};
 use poppy_demux::{Demuxer, Mp4Demuxer};
 
+mod player;
+
 #[derive(Parser, Debug)]
 #[command(
     name = "poppy",
-    version = "0.3.0",
-    about = "🌸 Poppy — Modern media pipeline inspector, zero-copy GPU decoder, and wgpu renderer"
+    version = "1.0.0",
+    about = "🌸 Poppy — Modern media pipeline inspector, zero-copy GPU decoder, and wgpu player"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -51,6 +53,11 @@ enum Commands {
         #[arg(short, long)]
         render: bool,
     },
+    /// Play video in an interactive desktop window with real-time hardware acceleration
+    Play {
+        /// Path to the media file
+        file: PathBuf,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -59,13 +66,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Commands::Probe { file } => {
             println!("🔍 Probing: {}", file.display());
-            let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+            let ext = file
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
             let is_mkv = ext == "mkv" || ext == "webm";
 
             if is_mkv {
                 let demuxer = poppy_demux::MatroskaDemuxer::open(&file)?;
                 let streams = demuxer.streams();
-                println!("📦 Container: Matroska / WebM ({} stream(s) found)\n", streams.len());
+                println!(
+                    "📦 Container: Matroska / WebM ({} stream(s) found)\n",
+                    streams.len()
+                );
 
                 for stream in streams {
                     println!("▶ Stream #{}:", stream.index);
@@ -81,12 +95,47 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         CodecConfig::Hevc(hvcc) => {
                             println!("  H.265 / HEVC Config:");
-                            println!("    Profile IDC:       {} ({})", hvcc.profile_idc, if hvcc.is_10bit() { "10-bit HDR" } else { "8-bit Main" });
+                            println!(
+                                "    Profile IDC:       {} ({})",
+                                hvcc.profile_idc,
+                                if hvcc.is_10bit() {
+                                    "10-bit HDR"
+                                } else {
+                                    "8-bit Main"
+                                }
+                            );
                             println!("    Bit Depth (Luma):  {}-bit", hvcc.bit_depth_luma);
                             println!("    Level:             {}", hvcc.level_idc);
                             println!("    VPS Count:         {}", hvcc.vps_list.len());
                             println!("    SPS Count:         {}", hvcc.sps_list.len());
                             println!("    PPS Count:         {}", hvcc.pps_list.len());
+                        }
+                        CodecConfig::Av1(av1c) => {
+                            println!("  AV1 Config:");
+                            println!("    Profile:           {}", av1c.seq_profile);
+                            println!("    Level:             {}", av1c.seq_level_idx);
+                            println!(
+                                "    Bit Depth:         {}",
+                                if av1c.is_10bit() {
+                                    "10-bit HDR"
+                                } else {
+                                    "8-bit Main"
+                                }
+                            );
+                            println!(
+                                "    Tier:              {}",
+                                if av1c.seq_tier { "High" } else { "Main" }
+                            );
+                            println!("    Monochrome:        {}", av1c.monochrome);
+                            println!("    Config OBUs Size:  {} byte(s)", av1c.config_obus.len());
+                        }
+                        CodecConfig::Audio(audio) => {
+                            println!("  Audio Config:");
+                            println!("    Sample Rate:       {} Hz", audio.sample_rate);
+                            println!("    Channels:          {}", audio.channels);
+                            if audio.bits_per_sample > 0 {
+                                println!("    Bits Per Sample:   {}-bit", audio.bits_per_sample);
+                            }
                         }
                         _ => {}
                     }
@@ -99,7 +148,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let streams = demuxer.streams();
             let tracks = demuxer.tracks();
 
-            println!("📦 Container: ISOBMFF / MP4 ({} stream(s) found)\n", streams.len());
+            println!(
+                "📦 Container: ISOBMFF / MP4 ({} stream(s) found)\n",
+                streams.len()
+            );
 
             for (i, stream) in streams.iter().enumerate() {
                 let track = &tracks[i];
@@ -142,7 +194,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     CodecConfig::Hevc(hvcc) => {
                         println!("  H.265 / HEVC Config:");
-                        println!("    Profile IDC:       {} ({})", hvcc.profile_idc, if hvcc.is_10bit() { "10-bit HDR" } else { "8-bit Main" });
+                        println!(
+                            "    Profile IDC:       {} ({})",
+                            hvcc.profile_idc,
+                            if hvcc.is_10bit() {
+                                "10-bit HDR"
+                            } else {
+                                "8-bit Main"
+                            }
+                        );
                         println!("    Bit Depth (Luma):  {}-bit", hvcc.bit_depth_luma);
                         println!("    Level:             {}", hvcc.level_idc);
                         println!("    NAL Length Size:   {} byte(s)", hvcc.nal_length_size);
@@ -150,11 +210,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         println!("    SPS Count:         {}", hvcc.sps_list.len());
                         println!("    PPS Count:         {}", hvcc.pps_list.len());
                     }
-                    CodecConfig::Av1(_) => {
-                        println!("  AV1 Config present");
+                    CodecConfig::Av1(av1c) => {
+                        println!("  AV1 Config:");
+                        println!("    Profile:           {}", av1c.seq_profile);
+                        println!("    Level:             {}", av1c.seq_level_idx);
+                        println!(
+                            "    Bit Depth:         {}",
+                            if av1c.is_10bit() {
+                                "10-bit HDR"
+                            } else {
+                                "8-bit Main"
+                            }
+                        );
+                        println!(
+                            "    Tier:              {}",
+                            if av1c.seq_tier { "High" } else { "Main" }
+                        );
+                        println!("    Monochrome:        {}", av1c.monochrome);
+                        println!("    Config OBUs Size:  {} byte(s)", av1c.config_obus.len());
                     }
-                    CodecConfig::Audio(_) => {
-                        println!("  Audio Config present");
+                    CodecConfig::Audio(audio) => {
+                        println!("  Audio Config:");
+                        println!("    Sample Rate:       {} Hz", audio.sample_rate);
+                        println!("    Channels:          {}", audio.channels);
+                        if audio.bits_per_sample > 0 {
+                            println!("    Bits Per Sample:   {}-bit", audio.bits_per_sample);
+                        }
                     }
                     CodecConfig::Unknown => {}
                 }
@@ -176,7 +257,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let target_stream_idx = match stream {
                 Some(idx) => {
                     if idx >= num_streams {
-                        return Err(format!("Stream index {} out of range (total {})", idx, num_streams).into());
+                        return Err(format!(
+                            "Stream index {} out of range (total {})",
+                            idx, num_streams
+                        )
+                        .into());
                     }
                     idx
                 }
@@ -219,8 +304,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
 
                         annex_b_buf.clear();
-                        let params_ref = if packet.is_keyframe { Some(&params[..]) } else { None };
-                        avcc_to_annex_b(&packet.data, avcc.nal_length_size, params_ref, &mut annex_b_buf)?;
+                        let params_ref = if packet.is_keyframe {
+                            Some(&params[..])
+                        } else {
+                            None
+                        };
+                        avcc_to_annex_b(
+                            &packet.data,
+                            avcc.nal_length_size,
+                            params_ref,
+                            &mut annex_b_buf,
+                        )?;
                         out_file.write_all(&annex_b_buf)?;
                         total_bytes += annex_b_buf.len();
                         packet_count += 1;
@@ -234,7 +328,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                         annex_b_buf.clear();
                         let (vps, sps, pps) = if packet.is_keyframe {
-                            (Some(&hvcc.vps_list[..]), Some(&hvcc.sps_list[..]), Some(&hvcc.pps_list[..]))
+                            (
+                                Some(&hvcc.vps_list[..]),
+                                Some(&hvcc.sps_list[..]),
+                                Some(&hvcc.pps_list[..]),
+                            )
                         } else {
                             (None, None, None)
                         };
@@ -252,6 +350,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         packet_count += 1;
                     }
                 }
+                CodecConfig::Av1(av1c) => {
+                    while let Some(packet) = demuxer.read_packet()? {
+                        if packet.stream_index != target_stream_idx {
+                            continue;
+                        }
+
+                        if packet.is_keyframe && !av1c.config_obus.is_empty() {
+                            out_file.write_all(&av1c.config_obus)?;
+                            total_bytes += av1c.config_obus.len();
+                        }
+                        out_file.write_all(&packet.data)?;
+                        total_bytes += packet.data.len();
+                        packet_count += 1;
+                    }
+                }
                 _ => {
                     return Err(format!("Unsupported codec for ES dump: {}", stream_codec).into());
                 }
@@ -266,15 +379,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
 
-        Commands::Decode { file, limit, render } => {
-            println!("🚀 Initializing hardware decoding pipeline for: {}", file.display());
+        Commands::Decode {
+            file,
+            limit,
+            render,
+        } => {
+            let backend_name = if cfg!(target_os = "linux") {
+                "Linux VA-API (DRM PRIME Zero-Copy)"
+            } else if cfg!(target_os = "windows") {
+                "Windows Direct3D 12 Video (DXGI Shared Handle)"
+            } else if cfg!(target_os = "macos") {
+                "macOS VideoToolbox (CVPixelBuffer Zero-Copy)"
+            } else {
+                "Generic Software Decode"
+            };
+            println!(
+                "🚀 Initializing hardware decoding pipeline [{}] for: {}",
+                backend_name,
+                file.display()
+            );
             let mut stream = poppy::open(&file)?;
 
             let renderer = if render {
                 match poppy_render::GpuRenderer::new_sync() {
                     Ok(r) => {
                         let info = r.adapter.get_info();
-                        println!("🎨 wgpu Zero-Copy Renderer: Active ({:?}, {})", info.backend, info.name);
+                        println!(
+                            "🎨 wgpu Zero-Copy Renderer: Active ({:?}, {})",
+                            info.backend, info.name
+                        );
                         Some(r)
                     }
                     Err(e) => {
@@ -299,11 +432,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if frame_count == 1 || frame_count % 30 == 0 {
                     println!(
                         "  [Frame #{:04}] PTS: {:?} | Format: {} | Size: {}x{}",
-                        frame_count,
-                        frame.pts,
-                        frame.pixel_format,
-                        frame.width,
-                        frame.height
+                        frame_count, frame.pts, frame.pixel_format, frame.width, frame.height
                     );
                 }
                 if let Some(max) = limit
@@ -324,6 +453,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "\n✨ Decoded {} frames in {:.2?} ({:.1} FPS) via GPU hardware accelerator",
                 frame_count, elapsed, fps
             );
+        }
+
+        Commands::Play { file } => {
+            player::run_player(file)?;
         }
     }
 

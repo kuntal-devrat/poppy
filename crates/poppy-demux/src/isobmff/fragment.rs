@@ -48,8 +48,14 @@ impl Tfhd {
                 return Err(DemuxError::UnexpectedEof { offset: 0 });
             }
             base_data_offset = Some(u64::from_be_bytes([
-                payload[offset], payload[offset + 1], payload[offset + 2], payload[offset + 3],
-                payload[offset + 4], payload[offset + 5], payload[offset + 6], payload[offset + 7],
+                payload[offset],
+                payload[offset + 1],
+                payload[offset + 2],
+                payload[offset + 3],
+                payload[offset + 4],
+                payload[offset + 5],
+                payload[offset + 6],
+                payload[offset + 7],
             ]));
             offset += 8;
         }
@@ -69,7 +75,10 @@ impl Tfhd {
                 return Err(DemuxError::UnexpectedEof { offset: 0 });
             }
             default_sample_duration = Some(u32::from_be_bytes([
-                payload[offset], payload[offset + 1], payload[offset + 2], payload[offset + 3],
+                payload[offset],
+                payload[offset + 1],
+                payload[offset + 2],
+                payload[offset + 3],
             ]));
             offset += 4;
         }
@@ -80,7 +89,10 @@ impl Tfhd {
                 return Err(DemuxError::UnexpectedEof { offset: 0 });
             }
             default_sample_size = Some(u32::from_be_bytes([
-                payload[offset], payload[offset + 1], payload[offset + 2], payload[offset + 3],
+                payload[offset],
+                payload[offset + 1],
+                payload[offset + 2],
+                payload[offset + 3],
             ]));
             offset += 4;
         }
@@ -91,7 +103,10 @@ impl Tfhd {
                 return Err(DemuxError::UnexpectedEof { offset: 0 });
             }
             default_sample_flags = Some(u32::from_be_bytes([
-                payload[offset], payload[offset + 1], payload[offset + 2], payload[offset + 3],
+                payload[offset],
+                payload[offset + 1],
+                payload[offset + 2],
+                payload[offset + 3],
             ]));
         }
 
@@ -117,7 +132,12 @@ pub fn parse_moof(
     for res in BoxIter::new(moof_body, moof_offset) {
         let (header, body, offset) = res?;
         if &header.box_type == b"traf" {
-            parse_traf(body, offset + header.header_size as u64, moof_offset, tracks)?;
+            parse_traf(
+                body,
+                offset + header.header_size as u64,
+                moof_offset,
+                tracks,
+            )?;
         }
     }
     Ok(())
@@ -225,7 +245,12 @@ fn parse_trun(
         if cursor + 4 > body.len() {
             return Err(DemuxError::UnexpectedEof { offset: 0 });
         }
-        let off = i32::from_be_bytes([body[cursor], body[cursor + 1], body[cursor + 2], body[cursor + 3]]);
+        let off = i32::from_be_bytes([
+            body[cursor],
+            body[cursor + 1],
+            body[cursor + 2],
+            body[cursor + 3],
+        ]);
         cursor += 4;
         off
     } else {
@@ -236,7 +261,12 @@ fn parse_trun(
         if cursor + 4 > body.len() {
             return Err(DemuxError::UnexpectedEof { offset: 0 });
         }
-        let f = u32::from_be_bytes([body[cursor], body[cursor + 1], body[cursor + 2], body[cursor + 3]]);
+        let f = u32::from_be_bytes([
+            body[cursor],
+            body[cursor + 1],
+            body[cursor + 2],
+            body[cursor + 3],
+        ]);
         cursor += 4;
         Some(f)
     } else {
@@ -250,7 +280,12 @@ fn parse_trun(
             if cursor + 4 > body.len() {
                 return Err(DemuxError::UnexpectedEof { offset: 0 });
             }
-            let d = u32::from_be_bytes([body[cursor], body[cursor + 1], body[cursor + 2], body[cursor + 3]]);
+            let d = u32::from_be_bytes([
+                body[cursor],
+                body[cursor + 1],
+                body[cursor + 2],
+                body[cursor + 3],
+            ]);
             cursor += 4;
             d
         } else {
@@ -261,7 +296,12 @@ fn parse_trun(
             if cursor + 4 > body.len() {
                 return Err(DemuxError::UnexpectedEof { offset: 0 });
             }
-            let s = u32::from_be_bytes([body[cursor], body[cursor + 1], body[cursor + 2], body[cursor + 3]]);
+            let s = u32::from_be_bytes([
+                body[cursor],
+                body[cursor + 1],
+                body[cursor + 2],
+                body[cursor + 3],
+            ]);
             cursor += 4;
             s
         } else {
@@ -274,7 +314,12 @@ fn parse_trun(
             if cursor + 4 > body.len() {
                 return Err(DemuxError::UnexpectedEof { offset: 0 });
             }
-            let f = u32::from_be_bytes([body[cursor], body[cursor + 1], body[cursor + 2], body[cursor + 3]]);
+            let f = u32::from_be_bytes([
+                body[cursor],
+                body[cursor + 1],
+                body[cursor + 2],
+                body[cursor + 3],
+            ]);
             cursor += 4;
             f
         } else {
@@ -286,9 +331,19 @@ fn parse_trun(
                 return Err(DemuxError::UnexpectedEof { offset: 0 });
             }
             let c_offset = if version == 0 {
-                u32::from_be_bytes([body[cursor], body[cursor + 1], body[cursor + 2], body[cursor + 3]]) as i64
+                u32::from_be_bytes([
+                    body[cursor],
+                    body[cursor + 1],
+                    body[cursor + 2],
+                    body[cursor + 3],
+                ]) as i64
             } else {
-                i32::from_be_bytes([body[cursor], body[cursor + 1], body[cursor + 2], body[cursor + 3]]) as i64
+                i32::from_be_bytes([
+                    body[cursor],
+                    body[cursor + 1],
+                    body[cursor + 2],
+                    body[cursor + 3],
+                ]) as i64
             };
             cursor += 4;
             Some(c_offset)

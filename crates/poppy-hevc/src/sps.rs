@@ -61,11 +61,8 @@ impl SequenceParameterSet {
         let sps_max_sub_layers_minus1 = reader.read_bits(3)? as u8;
         let sps_temporal_id_nesting_flag = reader.read_bit()?;
 
-        let profile_tier_level = ProfileTierLevel::parse(
-            &mut reader,
-            true,
-            sps_max_sub_layers_minus1 as u32,
-        )?;
+        let profile_tier_level =
+            ProfileTierLevel::parse(&mut reader, true, sps_max_sub_layers_minus1 as u32)?;
 
         let sps_seq_parameter_set_id = reader.read_ue()?;
         let chroma_format_idc = reader.read_ue()?;
@@ -79,7 +76,8 @@ impl SequenceParameterSet {
         let pic_height_in_luma_samples = reader.read_ue()?;
 
         let conformance_window_flag = reader.read_bit()?;
-        let (mut conf_win_left, mut conf_win_right, mut conf_win_top, mut conf_win_bottom) = (0, 0, 0, 0);
+        let (mut conf_win_left, mut conf_win_right, mut conf_win_top, mut conf_win_bottom) =
+            (0, 0, 0, 0);
 
         if conformance_window_flag {
             conf_win_left = reader.read_ue()?;
@@ -90,7 +88,18 @@ impl SequenceParameterSet {
 
         let bit_depth_luma_minus8 = reader.read_ue()?;
         let bit_depth_chroma_minus8 = reader.read_ue()?;
+        if bit_depth_luma_minus8 > 8 || bit_depth_chroma_minus8 > 8 {
+            return Err(BitstreamError::InvalidSyntax(format!(
+                "invalid bit depth: luma={bit_depth_luma_minus8}, chroma={bit_depth_chroma_minus8}"
+            )));
+        }
+
         let log2_max_pic_order_cnt_lsb_minus4 = reader.read_ue()?;
+        if log2_max_pic_order_cnt_lsb_minus4 > 12 {
+            return Err(BitstreamError::InvalidSyntax(format!(
+                "invalid log2_max_pic_order_cnt_lsb_minus4: {log2_max_pic_order_cnt_lsb_minus4}"
+            )));
+        }
 
         let sps_sub_layer_ordering_info_present_flag = reader.read_bit()?;
         let mut max_dec_pic_buffering = [0u32; 8];
@@ -104,7 +113,7 @@ impl SequenceParameterSet {
 
         for i in start_sub_layer..=sps_max_sub_layers_minus1 as usize {
             if i < 8 {
-                let max_dpb = reader.read_ue()? + 1;
+                let max_dpb = reader.read_ue()?.saturating_add(1);
                 let max_reorder = reader.read_ue()?;
                 let _max_latency = reader.read_ue()?;
                 max_dec_pic_buffering[i] = max_dpb;
@@ -115,8 +124,10 @@ impl SequenceParameterSet {
         if !sps_sub_layer_ordering_info_present_flag {
             for i in 0..sps_max_sub_layers_minus1 as usize {
                 if i < 8 {
-                    max_dec_pic_buffering[i] = max_dec_pic_buffering[sps_max_sub_layers_minus1 as usize];
-                    max_num_reorder_pics[i] = max_num_reorder_pics[sps_max_sub_layers_minus1 as usize];
+                    max_dec_pic_buffering[i] =
+                        max_dec_pic_buffering[sps_max_sub_layers_minus1 as usize];
+                    max_num_reorder_pics[i] =
+                        max_num_reorder_pics[sps_max_sub_layers_minus1 as usize];
                 }
             }
         }
@@ -149,6 +160,11 @@ impl SequenceParameterSet {
         }
 
         let num_short_term_ref_pic_sets = reader.read_ue()?;
+        if num_short_term_ref_pic_sets > 64 {
+            return Err(BitstreamError::InvalidSyntax(format!(
+                "num_short_term_ref_pic_sets {num_short_term_ref_pic_sets} exceeds max 64"
+            )));
+        }
         let mut short_term_ref_pic_sets = Vec::with_capacity(num_short_term_ref_pic_sets as usize);
 
         for i in 0..num_short_term_ref_pic_sets {
@@ -159,6 +175,11 @@ impl SequenceParameterSet {
         let long_term_ref_pics_present_flag = reader.read_bit()?;
         if long_term_ref_pics_present_flag {
             let num_lt_rps = reader.read_ue()?;
+            if num_lt_rps > 32 {
+                return Err(BitstreamError::InvalidSyntax(format!(
+                    "num_lt_rps {num_lt_rps} exceeds max 32"
+                )));
+            }
             let poc_bits = (log2_max_pic_order_cnt_lsb_minus4 + 4) as usize;
             for _ in 0..num_lt_rps {
                 reader.skip_bits(poc_bits)?;
@@ -227,7 +248,7 @@ impl SequenceParameterSet {
 
     /// Pixel bit depth (8 for standard, 10 for HDR).
     pub fn bit_depth(&self) -> u8 {
-        8 + self.bit_depth_luma_minus8 as u8
+        8u8.saturating_add(self.bit_depth_luma_minus8.min(8) as u8)
     }
 
     /// Returns `true` if this stream has 10-bit color depth.
@@ -276,9 +297,24 @@ fn parse_short_term_ref_pic_set(
         let _delta_rps_sign = reader.read_bit()?;
         let _abs_delta_rps_minus1 = reader.read_ue()?;
 
-        let ref_rps_idx = st_rps_idx as usize - 1 - delta_idx_minus1 as usize;
+        let delta = match (delta_idx_minus1 as usize).checked_add(1) {
+            Some(d) => d,
+            None => {
+                return Err(BitstreamError::InvalidSyntax(
+                    "delta_idx_minus1 overflow".into(),
+                ));
+            }
+        };
+        if delta > st_rps_idx as usize {
+            return Err(BitstreamError::InvalidSyntax(format!(
+                "invalid ref_rps_idx: st_rps_idx {st_rps_idx} < delta {delta}"
+            )));
+        }
+        let ref_rps_idx = st_rps_idx as usize - delta;
         let num_pics = if ref_rps_idx < existing_sets.len() {
-            existing_sets[ref_rps_idx].num_negative_pics + existing_sets[ref_rps_idx].num_positive_pics
+            existing_sets[ref_rps_idx]
+                .num_negative_pics
+                .saturating_add(existing_sets[ref_rps_idx].num_positive_pics)
         } else {
             0
         };
@@ -295,13 +331,22 @@ fn parse_short_term_ref_pic_set(
         let num_negative_pics = reader.read_ue()?;
         let num_positive_pics = reader.read_ue()?;
 
+        if num_negative_pics > 16 || num_positive_pics > 16 {
+            return Err(BitstreamError::InvalidSyntax(format!(
+                "num_pics exceeds max reference limit (neg: {num_negative_pics}, pos: {num_positive_pics})"
+            )));
+        }
+
         let mut delta_poc_s0 = Vec::with_capacity(num_negative_pics as usize);
         let mut used_by_curr_pic_s0 = Vec::with_capacity(num_negative_pics as usize);
 
         for _ in 0..num_negative_pics {
             let delta_poc_s0_minus1 = reader.read_ue()?;
             let used = reader.read_bit()?;
-            delta_poc_s0.push(-(delta_poc_s0_minus1 as i32 + 1));
+            let val = (delta_poc_s0_minus1 as i64)
+                .saturating_add(1)
+                .min(i32::MAX as i64) as i32;
+            delta_poc_s0.push(-val);
             used_by_curr_pic_s0.push(used);
         }
 
@@ -311,7 +356,10 @@ fn parse_short_term_ref_pic_set(
         for _ in 0..num_positive_pics {
             let delta_poc_s1_minus1 = reader.read_ue()?;
             let used = reader.read_bit()?;
-            delta_poc_s1.push(delta_poc_s1_minus1 as i32 + 1);
+            let val = (delta_poc_s1_minus1 as i64)
+                .saturating_add(1)
+                .min(i32::MAX as i64) as i32;
+            delta_poc_s1.push(val);
             used_by_curr_pic_s1.push(used);
         }
 

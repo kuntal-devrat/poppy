@@ -5,6 +5,7 @@ members = [
     "crates/poppy-demux",
     "crates/poppy-h264",
     "crates/poppy-hevc",
+    "crates/poppy-av1",
     "crates/poppy-hw",
     "crates/poppy-render",
     "crates/poppy",
@@ -12,7 +13,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.3.0"
+version = "1.0.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/kuntal-devrat/poppy"
@@ -23,6 +24,8 @@ description = "Crisp, memory-safe video demuxing with zero-copy hardware decode"
 poppy-core = { path = "crates/poppy-core" }
 poppy-demux = { path = "crates/poppy-demux" }
 poppy-h264 = { path = "crates/poppy-h264" }
+poppy-hevc = { path = "crates/poppy-hevc" }
+poppy-av1 = { path = "crates/poppy-av1" }
 poppy-hw = { path = "crates/poppy-hw" }
 poppy-render = { path = "crates/poppy-render" }
 poppy = { path = "crates/poppy" }
@@ -37,6 +40,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 libc = "0.2"
 wgpu = "24"
+wgpu-hal = "24"
+ash = "0.38"
 pollster = "1.0"
 bytemuck = { version = "1", features = ["derive"] }
-poppy-hevc = { path = "crates/poppy-hevc" }
+winit = "0.30"
+futures-core = "0.3"
+futures-util = { version = "0.3", default-features = false }
+proptest = "1.6"

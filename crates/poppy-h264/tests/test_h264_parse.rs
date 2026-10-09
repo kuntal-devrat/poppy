@@ -1,6 +1,4 @@
-use poppy_h264::{
-    find_annex_b_nals, NalHeader, NalUnitType, Pps, SliceHeader, SliceType, Sps,
-};
+use poppy_h264::{NalHeader, NalUnitType, Pps, SliceHeader, SliceType, Sps, find_annex_b_nals};
 
 #[test]
 fn test_h264_full_stream_parsing() {
@@ -8,18 +6,13 @@ fn test_h264_full_stream_parsing() {
     // SPS + PPS + IDR Slice with emulation prevention bytes
     let stream: &[u8] = &[
         // SPS: High profile, 1920x1080
-        0x00, 0x00, 0x00, 0x01,
-        0x67, 0x64, 0x00, 0x1F, 0xAC, 0xD9, 0x40, 0x78,
-        0x02, 0x27, 0xE5, 0xC0, 0x44, 0x00, 0x00, 0x03,
-        0x00, 0x04, 0x00, 0x00, 0x03, 0x00, 0xF0, 0x36,
-        0x82, 0x21, 0x1B,
-        // PPS: CABAC, pic_id 0
-        0x00, 0x00, 0x00, 0x01,
-        0x68, 0xEB, 0xE3, 0xCB, 0x22, 0xC0,
+        0x00, 0x00, 0x00, 0x01, 0x67, 0x64, 0x00, 0x1F, 0xAC, 0xD9, 0x40, 0x78, 0x02, 0x27, 0xE5,
+        0xC0, 0x44, 0x00, 0x00, 0x03, 0x00, 0x04, 0x00, 0x00, 0x03, 0x00, 0xF0, 0x36, 0x82, 0x21,
+        0x1B, // PPS: CABAC, pic_id 0
+        0x00, 0x00, 0x00, 0x01, 0x68, 0xEB, 0xE3, 0xCB, 0x22, 0xC0,
         // IDR Slice (NAL type 5 = 0x65)
         // first_mb = 0 (1 bit '1'), slice_type = 7 (I-slice, ue 7 = 0001000), pps_id = 0 (1 bit '1'), frame_num = 0 (4 bits '0000'), idr_pic_id = 0 (1 bit '1'), poc_lsb = 0 (6 bits '000000')...
-        0x00, 0x00, 0x00, 0x01,
-        0x65, 0x88, 0x84, 0x00, 0x10, 0xFF,
+        0x00, 0x00, 0x00, 0x01, 0x65, 0x88, 0x84, 0x00, 0x10, 0xFF,
     ];
 
     let nals = find_annex_b_nals(stream);
@@ -50,8 +43,14 @@ fn test_h264_full_stream_parsing() {
     assert!(idr_h.unit_type.is_idr());
 
     // Parse slice header from payload (after 1-byte NAL header)
-    let slice = SliceHeader::parse(idr_h.unit_type, &idr_nal[1..], &sps, &pps)
-        .expect("Failed to parse IDR Slice Header");
+    let slice = SliceHeader::parse(
+        idr_h.unit_type,
+        idr_h.nal_ref_idc,
+        &idr_nal[1..],
+        &sps,
+        &pps,
+    )
+    .expect("Failed to parse IDR Slice Header");
 
     assert_eq!(slice.first_mb_in_slice, 0);
     assert_eq!(slice.slice_type, SliceType::I);

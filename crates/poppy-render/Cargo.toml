@@ -11,5 +11,16 @@ poppy-core = { workspace = true }
 poppy-hw = { workspace = true }
 thiserror = { workspace = true }
 wgpu = { workspace = true }
+wgpu-hal = { workspace = true, optional = true }
+ash = { workspace = true, optional = true }
+libc = { workspace = true }
 bytemuck = { workspace = true }
 pollster = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+wgpu-hal = { workspace = true, features = ["vulkan"] }
+ash = { workspace = true }
+libc = { workspace = true }
+
+[dev-dependencies]
+poppy-demux = { workspace = true }

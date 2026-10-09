@@ -117,9 +117,19 @@ impl BoxHeader {
     pub fn is_container(&self) -> bool {
         matches!(
             &self.box_type,
-            b"moov" | b"trak" | b"mdia" | b"minf" | b"stbl" | b"dinf"
-                | b"edts" | b"udta" | b"moof" | b"traf" | b"mvex"
-                | b"sinf" | b"schi"
+            b"moov"
+                | b"trak"
+                | b"mdia"
+                | b"minf"
+                | b"stbl"
+                | b"dinf"
+                | b"edts"
+                | b"udta"
+                | b"moof"
+                | b"traf"
+                | b"mvex"
+                | b"sinf"
+                | b"schi"
         )
     }
 }
@@ -179,8 +189,9 @@ mod tests {
         // ftyp box: size=20, type="ftyp"
         let data = [
             0x00, 0x00, 0x00, 0x14, // size = 20
-            b'f', b't', b'y', b'p', // type = "ftyp"
-            // ... body would follow
+            b'f', b't', b'y',
+            b'p', // type = "ftyp"
+                  // ... body would follow
         ];
 
         let header = BoxHeader::parse(&data, 0).unwrap();

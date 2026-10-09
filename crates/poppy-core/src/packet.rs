@@ -2,8 +2,8 @@
 
 use bytes::Bytes;
 
-use crate::codec::CodecConfig;
 use crate::CodecId;
+use crate::codec::CodecConfig;
 
 /// Rational timebase for timestamp arithmetic.
 ///

@@ -1,0 +1,15 @@
+[package]
+name = "poppy-av1"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Pure Rust bitstream parser for AV1 Open Bitstream Units (OBUs)"
+
+[dependencies]
+poppy-core = { workspace = true }
+bytes = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+

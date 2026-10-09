@@ -3,10 +3,14 @@
 //! High-performance GPU rendering and zero-copy interop bridges powered by `wgpu`.
 
 pub mod dmabuf;
+pub mod dxgi;
+pub mod metal;
 pub mod pipeline;
 pub mod texture;
 
 pub use dmabuf::{DmaBufImage, DmaBufPlane};
+pub use dxgi::DxgiZeroCopyTextures;
+pub use metal::MetalZeroCopyTextures;
 pub use pipeline::{ColorSpace, GpuRenderer, VideoRenderPipeline};
 pub use texture::GpuTexture;
 

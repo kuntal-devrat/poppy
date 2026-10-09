@@ -12,8 +12,11 @@ poppy-core = { workspace = true }
 poppy-demux = { workspace = true }
 poppy-h264 = { workspace = true }
 poppy-hevc = { workspace = true }
+poppy-av1 = { workspace = true }
 poppy-hw = { workspace = true }
 poppy-render = { workspace = true }
 clap = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+winit = { workspace = true }
+wgpu = { workspace = true }

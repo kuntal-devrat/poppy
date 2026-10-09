@@ -197,8 +197,8 @@ mod tests {
     fn test_annex_b_splitting() {
         let stream = [
             0, 0, 0, 1, 0x67, 1, 2, 3, // SPS
-            0, 0, 0, 1, 0x68, 4, 5,    // PPS
-            0, 0, 1, 0x65, 6,          // IDR with 3-byte start code
+            0, 0, 0, 1, 0x68, 4, 5, // PPS
+            0, 0, 1, 0x65, 6, // IDR with 3-byte start code
         ];
 
         let nals = find_annex_b_nals(&stream);

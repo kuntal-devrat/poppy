@@ -1,5 +1,5 @@
-use std::path::Path;
 use poppy_demux::Mp4Demuxer;
+use std::path::Path;
 
 #[test]
 fn test_real_video_open() {
@@ -11,4 +11,3 @@ fn test_real_video_open() {
     let demuxer = Mp4Demuxer::open(path).expect("Failed to open real video file");
     assert_eq!(demuxer.tracks().len(), 2);
 }
-

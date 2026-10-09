@@ -36,6 +36,9 @@ pub struct SurfacePool {
     pub height: u32,
 }
 
+unsafe impl Send for SurfacePool {}
+unsafe impl Sync for SurfacePool {}
+
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 impl SurfacePool {
     /// Allocate `count` surfaces of format NV12 (`VA_RT_FORMAT_YUV420`) and create a decode context.
@@ -47,7 +50,15 @@ impl SurfacePool {
         height: u32,
         count: usize,
     ) -> Result<Self, HwError> {
-        Self::new_with_format(va, display, config_id, width, height, count, VA_RT_FORMAT_YUV420)
+        Self::new_with_format(
+            va,
+            display,
+            config_id,
+            width,
+            height,
+            count,
+            VA_RT_FORMAT_YUV420,
+        )
     }
 
     /// Allocate `count` surfaces with a specified runtime pixel format (NV12 or P010).
@@ -79,7 +90,6 @@ impl SurfacePool {
                     va.err_str(status)
                 )));
             }
-
             let mut context_id = 0;
             let status = (va.vaCreateContext)(
                 display,
@@ -134,6 +144,84 @@ impl SurfacePool {
                 descriptor,
             })
         }
+    }
+
+    /// Exports a decoded surface as a high-level DmaBufDescriptor.
+    pub fn export_dmabuf_descriptor(
+        &self,
+        surface_id: VASurfaceID,
+    ) -> Result<crate::DmaBufDescriptor, HwError> {
+        if let Ok(img) = self.derive_image(surface_id) {
+            let prime_res = self.acquire_prime_fd(&img);
+            let desc = match prime_res {
+                Ok(prime_fd) => {
+                    let dup_fd = unsafe { libc::dup(prime_fd) };
+                    unsafe {
+                        (self.va.vaReleaseBufferHandle)(self.display, img.buf);
+                    }
+                    if dup_fd >= 0 {
+                        let mut offsets = Vec::new();
+                        let mut pitches = Vec::new();
+                        for i in 0..img.num_planes as usize {
+                            offsets.push(img.offsets[i]);
+                            pitches.push(img.pitches[i]);
+                        }
+                        self.destroy_image(&img);
+                        return Ok(crate::DmaBufDescriptor {
+                            fd: dup_fd,
+                            drm_format: img.format.fourcc,
+                            drm_modifier: 0,
+                            width: img.width as u32,
+                            height: img.height as u32,
+                            offsets,
+                            pitches,
+                        });
+                    }
+                    None
+                }
+                Err(_) => None,
+            };
+            self.destroy_image(&img);
+            if let Some(d) = desc {
+                return Ok(d);
+            }
+        }
+
+        // Fallback: DRM PRIME 2 export via vaExportSurfaceHandle
+        if let Ok(dmabuf_surf) = self.export_dmabuf(surface_id) {
+            let desc = &dmabuf_surf.descriptor;
+            if desc.num_objects > 0 && desc.objects[0].fd >= 0 {
+                let dup_fd = unsafe { libc::dup(desc.objects[0].fd) };
+                if dup_fd >= 0 {
+                    let mut offsets = Vec::new();
+                    let mut pitches = Vec::new();
+                    let drm_format = if desc.num_layers > 0 {
+                        desc.layers[0].drm_format
+                    } else {
+                        desc.fourcc
+                    };
+                    for i in 0..desc.num_layers as usize {
+                        for p in 0..desc.layers[i].num_planes as usize {
+                            offsets.push(desc.layers[i].offset[p]);
+                            pitches.push(desc.layers[i].pitch[p]);
+                        }
+                    }
+                    return Ok(crate::DmaBufDescriptor {
+                        fd: dup_fd,
+                        drm_format,
+                        drm_modifier: desc.objects[0].drm_format_modifier,
+                        width: desc.width,
+                        height: desc.height,
+                        offsets,
+                        pitches,
+                    });
+                }
+            }
+        }
+
+        Err(HwError::DecodeError(
+            "Failed to export surface as DMA-BUF descriptor".into(),
+        ))
     }
 
     /// Derives a VAImage from a hardware surface without copying.

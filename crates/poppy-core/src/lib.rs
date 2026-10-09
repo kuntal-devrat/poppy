@@ -11,7 +11,7 @@ pub mod error;
 pub mod packet;
 pub mod pixel;
 
-pub use codec::{AudioConfig, AvcCRecord, Av1CRecord, CodecConfig, CodecId, HvcCRecord};
+pub use codec::{AudioConfig, Av1CRecord, AvcCRecord, CodecConfig, CodecId, HvcCRecord};
 pub use error::CoreError;
 pub use packet::{Packet, StreamInfo, TimeBase};
-pub use pixel::{ChromaSubsampling, ColorSpace, PixelFormat};
+pub use pixel::{ChromaSubsampling, ColorSpace, InterlaceMode, PixelFormat};

@@ -42,20 +42,34 @@ impl SttsTable {
             });
         }
         // version (1) + flags (3)
-        let entry_count = u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]) as usize;
+        let entry_count =
+            u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]) as usize;
         let expected_len = 8 + entry_count.saturating_mul(8);
         if payload.len() < expected_len {
             return Err(DemuxError::InvalidBox {
                 offset: 0,
-                detail: format!("stts payload too short: expected {expected_len}, got {}", payload.len()),
+                detail: format!(
+                    "stts payload too short: expected {expected_len}, got {}",
+                    payload.len()
+                ),
             });
         }
 
         let mut entries = Vec::with_capacity(entry_count);
         let mut offset = 8;
         for _ in 0..entry_count {
-            let count = u32::from_be_bytes([payload[offset], payload[offset + 1], payload[offset + 2], payload[offset + 3]]);
-            let delta = u32::from_be_bytes([payload[offset + 4], payload[offset + 5], payload[offset + 6], payload[offset + 7]]);
+            let count = u32::from_be_bytes([
+                payload[offset],
+                payload[offset + 1],
+                payload[offset + 2],
+                payload[offset + 3],
+            ]);
+            let delta = u32::from_be_bytes([
+                payload[offset + 4],
+                payload[offset + 5],
+                payload[offset + 6],
+                payload[offset + 7],
+            ]);
             entries.push((count, delta));
             offset += 8;
         }
@@ -104,23 +118,42 @@ impl CttsTable {
             });
         }
         let version = payload[0];
-        let entry_count = u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]) as usize;
+        let entry_count =
+            u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]) as usize;
         let expected_len = 8 + entry_count.saturating_mul(8);
         if payload.len() < expected_len {
             return Err(DemuxError::InvalidBox {
                 offset: 0,
-                detail: format!("ctts payload too short: expected {expected_len}, got {}", payload.len()),
+                detail: format!(
+                    "ctts payload too short: expected {expected_len}, got {}",
+                    payload.len()
+                ),
             });
         }
 
         let mut entries = Vec::with_capacity(entry_count);
         let mut offset = 8;
         for _ in 0..entry_count {
-            let count = u32::from_be_bytes([payload[offset], payload[offset + 1], payload[offset + 2], payload[offset + 3]]);
+            let count = u32::from_be_bytes([
+                payload[offset],
+                payload[offset + 1],
+                payload[offset + 2],
+                payload[offset + 3],
+            ]);
             let sample_offset = if version == 0 {
-                u32::from_be_bytes([payload[offset + 4], payload[offset + 5], payload[offset + 6], payload[offset + 7]]) as i64
+                u32::from_be_bytes([
+                    payload[offset + 4],
+                    payload[offset + 5],
+                    payload[offset + 6],
+                    payload[offset + 7],
+                ]) as i64
             } else {
-                i32::from_be_bytes([payload[offset + 4], payload[offset + 5], payload[offset + 6], payload[offset + 7]]) as i64
+                i32::from_be_bytes([
+                    payload[offset + 4],
+                    payload[offset + 5],
+                    payload[offset + 6],
+                    payload[offset + 7],
+                ]) as i64
             };
             entries.push((count, sample_offset));
             offset += 8;
@@ -162,19 +195,28 @@ impl StssTable {
                 detail: "stss payload too short".into(),
             });
         }
-        let entry_count = u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]) as usize;
+        let entry_count =
+            u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]) as usize;
         let expected_len = 8 + entry_count.saturating_mul(4);
         if payload.len() < expected_len {
             return Err(DemuxError::InvalidBox {
                 offset: 0,
-                detail: format!("stss payload too short: expected {expected_len}, got {}", payload.len()),
+                detail: format!(
+                    "stss payload too short: expected {expected_len}, got {}",
+                    payload.len()
+                ),
             });
         }
 
         let mut sync_samples = BTreeSet::new();
         let mut offset = 8;
         for _ in 0..entry_count {
-            let sample_num = u32::from_be_bytes([payload[offset], payload[offset + 1], payload[offset + 2], payload[offset + 3]]);
+            let sample_num = u32::from_be_bytes([
+                payload[offset],
+                payload[offset + 1],
+                payload[offset + 2],
+                payload[offset + 3],
+            ]);
             sync_samples.insert(sample_num);
             offset += 4;
         }
@@ -203,21 +245,42 @@ impl StszTable {
                 detail: "stsz payload too short".into(),
             });
         }
-        let default_sample_size = u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]);
-        let sample_count = u32::from_be_bytes([payload[8], payload[9], payload[10], payload[11]]) as usize;
+        let default_sample_size =
+            u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]);
+        let sample_count =
+            u32::from_be_bytes([payload[8], payload[9], payload[10], payload[11]]) as usize;
+
+        // Security guard: limit maximum sample count to prevent OOM denial-of-service
+        const MAX_SAMPLE_COUNT: usize = 10_000_000;
+        if sample_count > MAX_SAMPLE_COUNT {
+            return Err(DemuxError::InvalidBox {
+                offset: 0,
+                detail: format!(
+                    "stsz sample_count {sample_count} exceeds safety limit ({MAX_SAMPLE_COUNT})"
+                ),
+            });
+        }
 
         let sample_sizes = if default_sample_size == 0 {
             let expected_len = 12 + sample_count.saturating_mul(4);
             if payload.len() < expected_len {
                 return Err(DemuxError::InvalidBox {
                     offset: 0,
-                    detail: format!("stsz payload too short: expected {expected_len}, got {}", payload.len()),
+                    detail: format!(
+                        "stsz payload too short: expected {expected_len}, got {}",
+                        payload.len()
+                    ),
                 });
             }
             let mut sizes = Vec::with_capacity(sample_count);
             let mut offset = 12;
             for _ in 0..sample_count {
-                let sz = u32::from_be_bytes([payload[offset], payload[offset + 1], payload[offset + 2], payload[offset + 3]]);
+                let sz = u32::from_be_bytes([
+                    payload[offset],
+                    payload[offset + 1],
+                    payload[offset + 2],
+                    payload[offset + 3],
+                ]);
                 sizes.push(sz);
                 offset += 4;
             }
@@ -258,21 +321,40 @@ impl StscTable {
                 detail: "stsc payload too short".into(),
             });
         }
-        let entry_count = u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]) as usize;
+        let entry_count =
+            u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]) as usize;
         let expected_len = 8 + entry_count.saturating_mul(12);
         if payload.len() < expected_len {
             return Err(DemuxError::InvalidBox {
                 offset: 0,
-                detail: format!("stsc payload too short: expected {expected_len}, got {}", payload.len()),
+                detail: format!(
+                    "stsc payload too short: expected {expected_len}, got {}",
+                    payload.len()
+                ),
             });
         }
 
         let mut entries = Vec::with_capacity(entry_count);
         let mut offset = 8;
         for _ in 0..entry_count {
-            let first_chunk = u32::from_be_bytes([payload[offset], payload[offset + 1], payload[offset + 2], payload[offset + 3]]);
-            let samples_per_chunk = u32::from_be_bytes([payload[offset + 4], payload[offset + 5], payload[offset + 6], payload[offset + 7]]);
-            let sample_description_index = u32::from_be_bytes([payload[offset + 8], payload[offset + 9], payload[offset + 10], payload[offset + 11]]);
+            let first_chunk = u32::from_be_bytes([
+                payload[offset],
+                payload[offset + 1],
+                payload[offset + 2],
+                payload[offset + 3],
+            ]);
+            let samples_per_chunk = u32::from_be_bytes([
+                payload[offset + 4],
+                payload[offset + 5],
+                payload[offset + 6],
+                payload[offset + 7],
+            ]);
+            let sample_description_index = u32::from_be_bytes([
+                payload[offset + 8],
+                payload[offset + 9],
+                payload[offset + 10],
+                payload[offset + 11],
+            ]);
             entries.push(StscEntry {
                 first_chunk,
                 samples_per_chunk,
@@ -299,19 +381,28 @@ impl ChunkOffsets {
                 detail: "stco payload too short".into(),
             });
         }
-        let entry_count = u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]) as usize;
+        let entry_count =
+            u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]) as usize;
         let expected_len = 8 + entry_count.saturating_mul(4);
         if payload.len() < expected_len {
             return Err(DemuxError::InvalidBox {
                 offset: 0,
-                detail: format!("stco payload too short: expected {expected_len}, got {}", payload.len()),
+                detail: format!(
+                    "stco payload too short: expected {expected_len}, got {}",
+                    payload.len()
+                ),
             });
         }
 
         let mut offsets = Vec::with_capacity(entry_count);
         let mut offset = 8;
         for _ in 0..entry_count {
-            let chunk_off = u32::from_be_bytes([payload[offset], payload[offset + 1], payload[offset + 2], payload[offset + 3]]) as u64;
+            let chunk_off = u32::from_be_bytes([
+                payload[offset],
+                payload[offset + 1],
+                payload[offset + 2],
+                payload[offset + 3],
+            ]) as u64;
             offsets.push(chunk_off);
             offset += 4;
         }
@@ -326,12 +417,16 @@ impl ChunkOffsets {
                 detail: "co64 payload too short".into(),
             });
         }
-        let entry_count = u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]) as usize;
+        let entry_count =
+            u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]) as usize;
         let expected_len = 8 + entry_count.saturating_mul(8);
         if payload.len() < expected_len {
             return Err(DemuxError::InvalidBox {
                 offset: 0,
-                detail: format!("co64 payload too short: expected {expected_len}, got {}", payload.len()),
+                detail: format!(
+                    "co64 payload too short: expected {expected_len}, got {}",
+                    payload.len()
+                ),
             });
         }
 
@@ -339,8 +434,14 @@ impl ChunkOffsets {
         let mut offset = 8;
         for _ in 0..entry_count {
             let chunk_off = u64::from_be_bytes([
-                payload[offset], payload[offset + 1], payload[offset + 2], payload[offset + 3],
-                payload[offset + 4], payload[offset + 5], payload[offset + 6], payload[offset + 7],
+                payload[offset],
+                payload[offset + 1],
+                payload[offset + 2],
+                payload[offset + 3],
+                payload[offset + 4],
+                payload[offset + 5],
+                payload[offset + 6],
+                payload[offset + 7],
             ]);
             offsets.push(chunk_off);
             offset += 8;
@@ -383,7 +484,9 @@ impl SampleTable {
 
         let mut stsc_idx = 0;
         for chunk_num in 1..=total_chunks as u32 {
-            while stsc_idx + 1 < stsc.entries.len() && stsc.entries[stsc_idx + 1].first_chunk <= chunk_num {
+            while stsc_idx + 1 < stsc.entries.len()
+                && stsc.entries[stsc_idx + 1].first_chunk <= chunk_num
+            {
                 stsc_idx += 1;
             }
             let spc = if stsc_idx < stsc.entries.len() {
@@ -410,7 +513,9 @@ impl SampleTable {
                 let file_offset = chunk_offset + sample_offset_in_chunk;
                 let (dts, duration) = dts_durations[current_sample_idx];
 
-                let pts = pts_offsets.as_ref().map(|offsets| dts + offsets[current_sample_idx]);
+                let pts = pts_offsets
+                    .as_ref()
+                    .map(|offsets| dts + offsets[current_sample_idx]);
 
                 // ISO 14496-12 §8.6.2: If stss is absent, EVERY sample is a sync sample
                 let is_keyframe = match stss {
@@ -444,16 +549,17 @@ impl SampleTable {
     pub fn find_keyframe_at_or_before(&self, timestamp: i64) -> Option<&SampleInfo> {
         let mut candidate = None;
         for s in &self.samples {
-            let ts = s.pts.unwrap_or(s.dts);
-            if ts <= timestamp {
-                if s.is_keyframe {
+            if s.is_keyframe {
+                let ts = s.pts.unwrap_or(s.dts);
+                if ts <= timestamp {
                     candidate = Some(s);
+                } else if candidate.is_none() {
+                    // Target timestamp precedes the first keyframe; fallback to the first available keyframe
+                    return Some(s);
                 }
-            } else {
-                break;
             }
         }
-        candidate
+        candidate.or_else(|| self.samples.iter().find(|s| s.is_keyframe))
     }
 }
 
@@ -508,7 +614,8 @@ mod tests {
             &stts,
             Some(&ctts),
             Some(&stss),
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(table.samples.len(), 4);
 

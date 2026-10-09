@@ -3,7 +3,7 @@
 //! Parses `moov` → `trak` → `mdia` → `minf` → `stbl` to extract stream metadata,
 //! codec configuration (`avcC`, etc.), and reconstructed sample tables.
 
-use poppy_core::codec::{AvcCRecord, CodecConfig, CodecId, HvcCRecord};
+use poppy_core::codec::{AudioConfig, Av1CRecord, AvcCRecord, CodecConfig, CodecId, HvcCRecord};
 use poppy_core::{StreamInfo, TimeBase};
 
 use super::box_reader::BoxHeader;
@@ -148,16 +148,22 @@ fn parse_trak(data: &[u8], file_offset: u64) -> Result<Option<ParsedTrack>, Demu
                     let version = body[0];
                     if version == 0 && body.len() >= 84 {
                         track_id = u32::from_be_bytes([body[12], body[13], body[14], body[15]]);
-                        tkhd_duration = u32::from_be_bytes([body[20], body[21], body[22], body[23]]) as u64;
-                        tkhd_width = u32::from_be_bytes([body[76], body[77], body[78], body[79]]) >> 16;
-                        tkhd_height = u32::from_be_bytes([body[80], body[81], body[82], body[83]]) >> 16;
+                        tkhd_duration =
+                            u32::from_be_bytes([body[20], body[21], body[22], body[23]]) as u64;
+                        tkhd_width =
+                            u32::from_be_bytes([body[76], body[77], body[78], body[79]]) >> 16;
+                        tkhd_height =
+                            u32::from_be_bytes([body[80], body[81], body[82], body[83]]) >> 16;
                     } else if version == 1 && body.len() >= 96 {
                         track_id = u32::from_be_bytes([body[20], body[21], body[22], body[23]]);
                         tkhd_duration = u64::from_be_bytes([
-                            body[28], body[29], body[30], body[31], body[32], body[33], body[34], body[35],
+                            body[28], body[29], body[30], body[31], body[32], body[33], body[34],
+                            body[35],
                         ]);
-                        tkhd_width = u32::from_be_bytes([body[88], body[89], body[90], body[91]]) >> 16;
-                        tkhd_height = u32::from_be_bytes([body[92], body[93], body[94], body[95]]) >> 16;
+                        tkhd_width =
+                            u32::from_be_bytes([body[88], body[89], body[90], body[91]]) >> 16;
+                        tkhd_height =
+                            u32::from_be_bytes([body[92], body[93], body[94], body[95]]) >> 16;
                     }
                 }
             }
@@ -170,12 +176,19 @@ fn parse_trak(data: &[u8], file_offset: u64) -> Result<Option<ParsedTrack>, Demu
                             if m_body.len() >= 4 {
                                 let version = m_body[0];
                                 if version == 0 && m_body.len() >= 20 {
-                                    mdhd_timescale = u32::from_be_bytes([m_body[12], m_body[13], m_body[14], m_body[15]]);
-                                    mdhd_duration = u32::from_be_bytes([m_body[16], m_body[17], m_body[18], m_body[19]]) as u64;
+                                    mdhd_timescale = u32::from_be_bytes([
+                                        m_body[12], m_body[13], m_body[14], m_body[15],
+                                    ]);
+                                    mdhd_duration = u32::from_be_bytes([
+                                        m_body[16], m_body[17], m_body[18], m_body[19],
+                                    ]) as u64;
                                 } else if version == 1 && m_body.len() >= 28 {
-                                    mdhd_timescale = u32::from_be_bytes([m_body[20], m_body[21], m_body[22], m_body[23]]);
+                                    mdhd_timescale = u32::from_be_bytes([
+                                        m_body[20], m_body[21], m_body[22], m_body[23],
+                                    ]);
                                     mdhd_duration = u64::from_be_bytes([
-                                        m_body[24], m_body[25], m_body[26], m_body[27], m_body[28], m_body[29], m_body[30], m_body[31],
+                                        m_body[24], m_body[25], m_body[26], m_body[27], m_body[28],
+                                        m_body[29], m_body[30], m_body[31],
                                     ]);
                                 }
                             }
@@ -190,7 +203,11 @@ fn parse_trak(data: &[u8], file_offset: u64) -> Result<Option<ParsedTrack>, Demu
                             for minf_res in BoxIter::new(m_body, minf_offset) {
                                 let (minf_h, minf_b, minf_off) = minf_res?;
                                 if &minf_h.box_type == b"stbl" {
-                                    let stbl_parsed = parse_stbl(minf_b, minf_off + minf_h.header_size as u64, &handler_type)?;
+                                    let stbl_parsed = parse_stbl(
+                                        minf_b,
+                                        minf_off + minf_h.header_size as u64,
+                                        &handler_type,
+                                    )?;
                                     sample_table = Some(stbl_parsed.sample_table);
                                     codec_id = stbl_parsed.codec_id;
                                     codec_config = stbl_parsed.codec_config;
@@ -212,7 +229,11 @@ fn parse_trak(data: &[u8], file_offset: u64) -> Result<Option<ParsedTrack>, Demu
         None => return Ok(None),
     };
 
-    let timescale = if mdhd_timescale > 0 { mdhd_timescale } else { 1000 };
+    let timescale = if mdhd_timescale > 0 {
+        mdhd_timescale
+    } else {
+        1000
+    };
     let time_base = TimeBase::new(1, timescale);
     let duration_ticks = if mdhd_duration > 0 {
         Some(mdhd_duration as i64)
@@ -222,8 +243,16 @@ fn parse_trak(data: &[u8], file_offset: u64) -> Result<Option<ParsedTrack>, Demu
         None
     };
 
-    let width = if sample_width > 0 { sample_width } else { tkhd_width };
-    let height = if sample_height > 0 { sample_height } else { tkhd_height };
+    let width = if sample_width > 0 {
+        sample_width
+    } else {
+        tkhd_width
+    };
+    let height = if sample_height > 0 {
+        sample_height
+    } else {
+        tkhd_height
+    };
 
     Ok(Some(ParsedTrack {
         track_id,
@@ -246,7 +275,11 @@ struct ParsedStbl {
     sample_table: SampleTable,
 }
 
-fn parse_stbl(data: &[u8], file_offset: u64, handler_type: &[u8; 4]) -> Result<ParsedStbl, DemuxError> {
+fn parse_stbl(
+    data: &[u8],
+    file_offset: u64,
+    handler_type: &[u8; 4],
+) -> Result<ParsedStbl, DemuxError> {
     let mut stsz = None;
     let mut stsc = None;
     let mut chunk_offsets = None;
@@ -263,7 +296,8 @@ fn parse_stbl(data: &[u8], file_offset: u64, handler_type: &[u8; 4]) -> Result<P
         let (header, body, offset) = res?;
         match &header.box_type {
             b"stsd" => {
-                let parsed_stsd = parse_stsd(body, offset + header.header_size as u64, handler_type)?;
+                let parsed_stsd =
+                    parse_stsd(body, offset + header.header_size as u64, handler_type)?;
                 codec_id = parsed_stsd.codec_id;
                 codec_config = parsed_stsd.codec_config;
                 width = parsed_stsd.width;
@@ -324,7 +358,11 @@ struct ParsedStsd {
     height: u32,
 }
 
-fn parse_stsd(data: &[u8], file_offset: u64, handler_type: &[u8; 4]) -> Result<ParsedStsd, DemuxError> {
+fn parse_stsd(
+    data: &[u8],
+    file_offset: u64,
+    handler_type: &[u8; 4],
+) -> Result<ParsedStsd, DemuxError> {
     if data.len() < 8 {
         return Err(DemuxError::InvalidBox {
             offset: file_offset,
@@ -350,8 +388,18 @@ fn parse_stsd(data: &[u8], file_offset: u64, handler_type: &[u8; 4]) -> Result<P
 
     // Parse the first entry
     if cursor + 8 <= data.len() {
-        let entry_size = u32::from_be_bytes([data[cursor], data[cursor + 1], data[cursor + 2], data[cursor + 3]]) as usize;
-        let entry_fourcc: [u8; 4] = [data[cursor + 4], data[cursor + 5], data[cursor + 6], data[cursor + 7]];
+        let entry_size = u32::from_be_bytes([
+            data[cursor],
+            data[cursor + 1],
+            data[cursor + 2],
+            data[cursor + 3],
+        ]) as usize;
+        let entry_fourcc: [u8; 4] = [
+            data[cursor + 4],
+            data[cursor + 5],
+            data[cursor + 6],
+            data[cursor + 7],
+        ];
         codec_id = CodecId::from_mp4_fourcc(&entry_fourcc);
 
         if entry_size >= 8 && cursor + entry_size <= data.len() {
@@ -375,11 +423,45 @@ fn parse_stsd(data: &[u8], file_offset: u64, handler_type: &[u8; 4]) -> Result<P
                         && let Ok(hvcc) = HvcCRecord::parse(c_body)
                     {
                         codec_config = CodecConfig::Hevc(hvcc);
+                    } else if &c_header.box_type == b"av1C"
+                        && let Ok(av1c) = Av1CRecord::parse(c_body)
+                    {
+                        codec_config = CodecConfig::Av1(av1c);
                     }
                 }
-            } else if entry_payload.len() >= 20 {
-                // Audio sample entry: 20 bytes fixed fields after 8-byte entry header
-                // Child boxes might contain esds
+            } else if entry_payload.len() >= 28 {
+                // Audio sample entry: (ISO 14496-12 §8.5.2.2 AudioSampleEntry)
+                let channels = u16::from_be_bytes([entry_payload[16], entry_payload[17]]);
+                let bits_per_sample = u16::from_be_bytes([entry_payload[18], entry_payload[19]]);
+                let sample_rate = (u32::from_be_bytes([
+                    entry_payload[24],
+                    entry_payload[25],
+                    entry_payload[26],
+                    entry_payload[27],
+                ]) >> 16)
+                    .max(1);
+
+                let mut extradata = None;
+                if entry_payload.len() > 28 {
+                    let child_boxes = &entry_payload[28..];
+                    let child_offset = file_offset + (cursor + 8 + 28) as u64;
+                    for (c_header, c_body, _) in BoxIter::new(child_boxes, child_offset).flatten() {
+                        if &c_header.box_type == b"esds"
+                            || &c_header.box_type == b"dOps"
+                            || &c_header.box_type == b"dfLa"
+                        {
+                            extradata = Some(bytes::Bytes::copy_from_slice(c_body));
+                            break;
+                        }
+                    }
+                }
+
+                codec_config = CodecConfig::Audio(AudioConfig {
+                    sample_rate,
+                    channels,
+                    bits_per_sample,
+                    extradata,
+                });
             }
         }
     }

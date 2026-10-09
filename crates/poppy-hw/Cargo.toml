@@ -10,6 +10,10 @@ description = "Hardware decoder abstraction layer for the Poppy media pipeline"
 poppy-core = { workspace = true }
 poppy-h264 = { workspace = true }
 poppy-hevc = { workspace = true }
+poppy-av1 = { workspace = true }
 bytes = { workspace = true }
 thiserror = { workspace = true }
 libc = { workspace = true }
+
+[dev-dependencies]
+poppy-demux = { workspace = true }

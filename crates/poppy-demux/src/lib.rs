@@ -42,7 +42,7 @@ pub enum DemuxError {
 }
 
 /// Trait implemented by all container demuxers.
-pub trait Demuxer {
+pub trait Demuxer: Send {
     /// Returns metadata for all streams (tracks) in the container.
     fn streams(&self) -> &[StreamInfo];
 
@@ -55,9 +55,5 @@ pub trait Demuxer {
     /// Seek to the nearest keyframe at or before the given timestamp.
     ///
     /// `timestamp` is in units of the specified stream's timebase.
-    fn seek_to_keyframe(
-        &mut self,
-        stream_index: usize,
-        timestamp: i64,
-    ) -> Result<(), DemuxError>;
+    fn seek_to_keyframe(&mut self, stream_index: usize, timestamp: i64) -> Result<(), DemuxError>;
 }

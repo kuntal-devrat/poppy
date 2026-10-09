@@ -32,11 +32,8 @@ impl VideoParameterSet {
         // vps_reserved_0xffff_16bits
         reader.skip_bits(16)?;
 
-        let profile_tier_level = ProfileTierLevel::parse(
-            &mut reader,
-            true,
-            vps_max_sub_layers_minus1 as u32,
-        )?;
+        let profile_tier_level =
+            ProfileTierLevel::parse(&mut reader, true, vps_max_sub_layers_minus1 as u32)?;
 
         let vps_sub_layer_ordering_info_present_flag = reader.read_bit()?;
         let mut max_dec_pic_buffering = [0u32; 8];
@@ -61,8 +58,10 @@ impl VideoParameterSet {
         if !vps_sub_layer_ordering_info_present_flag {
             for i in 0..vps_max_sub_layers_minus1 as usize {
                 if i < 8 {
-                    max_dec_pic_buffering[i] = max_dec_pic_buffering[vps_max_sub_layers_minus1 as usize];
-                    max_num_reorder_pics[i] = max_num_reorder_pics[vps_max_sub_layers_minus1 as usize];
+                    max_dec_pic_buffering[i] =
+                        max_dec_pic_buffering[vps_max_sub_layers_minus1 as usize];
+                    max_num_reorder_pics[i] =
+                        max_num_reorder_pics[vps_max_sub_layers_minus1 as usize];
                 }
             }
         }

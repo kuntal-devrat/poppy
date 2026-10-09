@@ -19,8 +19,8 @@ pub mod slice;
 pub mod sps;
 pub mod vps;
 
-pub use bitstream::{remove_emulation_prevention, BitReader, BitstreamError};
-pub use nal::{split_annex_b_nalus, HevcNalHeader, HevcNalType, HevcNalUnit, NalError};
+pub use bitstream::{BitReader, BitstreamError, remove_emulation_prevention};
+pub use nal::{HevcNalHeader, HevcNalType, HevcNalUnit, NalError, split_annex_b_nalus};
 pub use pps::PictureParameterSet;
 pub use ptl::ProfileTierLevel;
 pub use slice::{HevcSliceType, SliceSegmentHeader};

@@ -2,7 +2,7 @@
 //!
 //! Implements ITU-T H.264 §7.3.2.1.1.
 
-use crate::bitstream::{remove_emulation_prevention, BitReader, BitstreamError};
+use crate::bitstream::{BitReader, BitstreamError, remove_emulation_prevention};
 
 /// Frame cropping specification from SPS.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -209,7 +209,11 @@ impl Sps {
                 3 => 1,     // 4:4:4
                 _ => 1,     // Monochrome
             };
-            width -= (crop.left + crop.right) * crop_unit_x;
+            let crop_pixels = crop
+                .left
+                .saturating_add(crop.right)
+                .saturating_mul(crop_unit_x);
+            width = width.saturating_sub(crop_pixels);
         }
         width
     }
@@ -224,19 +228,23 @@ impl Sps {
                 2 => mult,     // 4:2:2
                 _ => mult,
             };
-            height -= (crop.top + crop.bottom) * crop_unit_y;
+            let crop_pixels = crop
+                .top
+                .saturating_add(crop.bottom)
+                .saturating_mul(crop_unit_y);
+            height = height.saturating_sub(crop_pixels);
         }
         height
     }
 }
 
 fn skip_scaling_list(r: &mut BitReader, size: usize) -> Result<(), BitstreamError> {
-    let mut last_scale = 8i32;
-    let mut next_scale = 8i32;
+    let mut last_scale = 8i64;
+    let mut next_scale = 8i64;
     for _ in 0..size {
         if next_scale != 0 {
-            let delta_scale = r.read_se()?;
-            next_scale = (last_scale + delta_scale + 256) % 256;
+            let delta_scale = r.read_se()? as i64;
+            next_scale = (last_scale + delta_scale).rem_euclid(256);
         }
         if next_scale != 0 {
             last_scale = next_scale;
@@ -258,15 +266,13 @@ mod tests {
         // cropping: bottom = 8 pixels -> height 1080
         // Encoded raw SPS bytes:
         let sps_bytes = [
-            0x67, 0x64, 0x00, 0x1F, 0xAC, 0xD9, 0x40, 0x78,
-            0x02, 0x27, 0xE5, 0xC0, 0x44, 0x00, 0x00, 0x03,
-            0x00, 0x04, 0x00, 0x00, 0x03, 0x00, 0xF0, 0x36,
-            0x82, 0x21, 0x1B,
+            0x67, 0x64, 0x00, 0x1F, 0xAC, 0xD9, 0x40, 0x78, 0x02, 0x27, 0xE5, 0xC0, 0x44, 0x00,
+            0x00, 0x03, 0x00, 0x04, 0x00, 0x00, 0x03, 0x00, 0xF0, 0x36, 0x82, 0x21, 0x1B,
         ];
 
         let sps = Sps::parse(&sps_bytes).expect("Failed to parse SPS");
         assert_eq!(sps.profile_idc, 100); // High Profile
-        assert_eq!(sps.level_idc, 31);    // Level 3.1
+        assert_eq!(sps.level_idc, 31); // Level 3.1
         assert_eq!(sps.pic_width_in_mbs_minus1, 119); // (119 + 1) * 16 = 1920
         assert_eq!(sps.coded_width(), 1920);
         assert_eq!(sps.coded_height(), 1088);

@@ -6,7 +6,7 @@ use std::path::Path;
 use bytes::Bytes;
 use poppy_core::{Packet, StreamInfo};
 
-use super::moov::{parse_moov, BoxIter, ParsedTrack};
+use super::moov::{BoxIter, ParsedTrack, parse_moov};
 use crate::{DemuxError, Demuxer};
 
 /// Backing storage for media data.
@@ -184,13 +184,14 @@ impl Demuxer for Mp4Demuxer {
         }
 
         let track = &self.tracks[stream_index];
-        let (target_sample_idx, target_pts_sec) = match track.sample_table.find_keyframe_at_or_before(timestamp) {
-            Some(sample) => {
-                let ts = sample.pts.unwrap_or(sample.dts);
-                (sample.index as usize, track.time_base.to_seconds(ts))
-            }
-            None => (0, 0.0),
-        };
+        let (target_sample_idx, target_pts_sec) =
+            match track.sample_table.find_keyframe_at_or_before(timestamp) {
+                Some(sample) => {
+                    let ts = sample.pts.unwrap_or(sample.dts);
+                    (sample.index as usize, track.time_base.to_seconds(ts))
+                }
+                None => (0, 0.0),
+            };
 
         self.read_indices[stream_index] = target_sample_idx;
 

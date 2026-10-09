@@ -88,6 +88,11 @@ impl PictureParameterSet {
         if tiles_enabled_flag {
             num_tile_columns_minus1 = reader.read_ue()?;
             num_tile_rows_minus1 = reader.read_ue()?;
+            if num_tile_columns_minus1 > 64 || num_tile_rows_minus1 > 64 {
+                return Err(BitstreamError::InvalidSyntax(format!(
+                    "tile dimensions exceed limits: cols {num_tile_columns_minus1}, rows {num_tile_rows_minus1}"
+                )));
+            }
             uniform_spacing_flag = reader.read_bit()?;
 
             if !uniform_spacing_flag {

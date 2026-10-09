@@ -44,10 +44,11 @@ impl<'a> Iterator for EbmlIter<'a> {
             Err(e) => return Some(Err(e)),
         };
 
-        let (size_opt, size_len) = match read_vint_size(&slice[id_len..], current_offset + id_len as u64) {
-            Ok(res) => res,
-            Err(e) => return Some(Err(e)),
-        };
+        let (size_opt, size_len) =
+            match read_vint_size(&slice[id_len..], current_offset + id_len as u64) {
+                Ok(res) => res,
+                Err(e) => return Some(Err(e)),
+            };
 
         let header_len = id_len + size_len;
         let size = match size_opt {
@@ -55,14 +56,24 @@ impl<'a> Iterator for EbmlIter<'a> {
             None => slice.len() - header_len, // Unknown size extends to end
         };
 
-        if header_len + size > slice.len() {
+        let total_len = match header_len.checked_add(size) {
+            Some(l) => l,
+            None => {
+                return Some(Err(DemuxError::InvalidBox {
+                    offset: current_offset,
+                    detail: "EBML element size overflow".into(),
+                }));
+            }
+        };
+
+        if total_len > slice.len() {
             return Some(Err(DemuxError::UnexpectedEof {
                 offset: current_offset + header_len as u64,
             }));
         }
 
-        let payload = &slice[header_len..header_len + size];
-        self.cursor += header_len + size;
+        let payload = &slice[header_len..total_len];
+        self.cursor += total_len;
 
         Some(Ok(EbmlElement {
             id,

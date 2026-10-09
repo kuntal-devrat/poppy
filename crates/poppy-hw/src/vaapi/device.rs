@@ -42,6 +42,11 @@ impl VaDevice {
         }
     }
 
+    /// Discovers an available DRM render node and initializes VA-API for AV1 VLD decoding.
+    pub fn open_auto_av1(_is_10bit: bool) -> Result<Self, HwError> {
+        Self::open_auto_for_profiles(&[VA_PROFILE_AV1_PROFILE0, VA_PROFILE_AV1_PROFILE1])
+    }
+
     /// Discovers an available DRM render node matching one of the desired profiles.
     pub fn open_auto_for_profiles(desired_profiles: &[VAProfile]) -> Result<Self, HwError> {
         let va = VaApi::load().map_err(HwError::DeviceInitFailed)?;
@@ -50,7 +55,8 @@ impl VaDevice {
         for num in 128..136 {
             let path = PathBuf::from(format!("/dev/dri/renderD{}", num));
             if path.exists()
-                && let Ok(dev) = Self::open_with_va_profiles(&path, Arc::clone(&va), desired_profiles)
+                && let Ok(dev) =
+                    Self::open_with_va_profiles(&path, Arc::clone(&va), desired_profiles)
             {
                 return Ok(dev);
             }
@@ -83,14 +89,18 @@ impl VaDevice {
             .read(true)
             .write(true)
             .open(path)
-            .map_err(|e| HwError::DeviceInitFailed(format!("Failed to open {}: {}", path.display(), e)))?;
+            .map_err(|e| {
+                HwError::DeviceInitFailed(format!("Failed to open {}: {}", path.display(), e))
+            })?;
 
         let raw_fd: RawFd = drm_file.as_raw_fd();
 
         unsafe {
             let display = (va.vaGetDisplayDRM)(raw_fd);
             if display.is_null() {
-                return Err(HwError::DeviceInitFailed("vaGetDisplayDRM returned null".into()));
+                return Err(HwError::DeviceInitFailed(
+                    "vaGetDisplayDRM returned null".into(),
+                ));
             }
 
             let mut major = 0;
@@ -107,7 +117,8 @@ impl VaDevice {
             let max_profiles = (va.vaMaxNumProfiles)(display);
             let mut profiles = vec![0 as VAProfile; max_profiles as usize];
             let mut num_profiles = 0;
-            let status = (va.vaQueryConfigProfiles)(display, profiles.as_mut_ptr(), &mut num_profiles);
+            let status =
+                (va.vaQueryConfigProfiles)(display, profiles.as_mut_ptr(), &mut num_profiles);
             if status != VA_STATUS_SUCCESS {
                 let _ = (va.vaTerminate)(display);
                 return Err(HwError::DeviceInitFailed(format!(

@@ -10,3 +10,7 @@ description = "High-performance H.265 / HEVC bitstream parser (VPS, SPS, PPS, Sl
 poppy-core = { workspace = true }
 bytes = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+

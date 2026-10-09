@@ -2,7 +2,7 @@
 //!
 //! Implements ITU-T H.264 §7.3.2.2.
 
-use crate::bitstream::{remove_emulation_prevention, BitReader, BitstreamError};
+use crate::bitstream::{BitReader, BitstreamError, remove_emulation_prevention};
 
 /// A parsed H.264 Picture Parameter Set (PPS).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,7 +69,9 @@ impl Pps {
                 }
                 6 => {
                     let pic_size_in_map_units = r.read_ue()?;
-                    let bits = (num_slice_groups_minus1 + 1).next_power_of_two().trailing_zeros() as usize;
+                    let bits = (num_slice_groups_minus1 + 1)
+                        .next_power_of_two()
+                        .trailing_zeros() as usize;
                     for _ in 0..=pic_size_in_map_units {
                         let _map = r.read_bits(bits)?;
                     }
@@ -133,12 +135,12 @@ impl Pps {
 }
 
 fn skip_scaling_list(r: &mut BitReader, size: usize) -> Result<(), BitstreamError> {
-    let mut last_scale = 8i32;
-    let mut next_scale = 8i32;
+    let mut last_scale = 8i64;
+    let mut next_scale = 8i64;
     for _ in 0..size {
         if next_scale != 0 {
-            let delta_scale = r.read_se()?;
-            next_scale = (last_scale + delta_scale + 256) % 256;
+            let delta_scale = r.read_se()? as i64;
+            next_scale = (last_scale + delta_scale).rem_euclid(256);
         }
         if next_scale != 0 {
             last_scale = next_scale;

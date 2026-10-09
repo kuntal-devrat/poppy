@@ -28,7 +28,7 @@ fuzz_target!(|data: &[u8]| {
             if nal.len() > 1 {
                 let h = NalHeader::parse(nal[0]);
                 if h.unit_type.is_slice() {
-                    let _ = SliceHeader::parse(h.unit_type, &nal[1..], &sps, &pps);
+                    let _ = SliceHeader::parse(h.unit_type, h.nal_ref_idc, &nal[1..], &sps, &pps);
                 }
             }
         }

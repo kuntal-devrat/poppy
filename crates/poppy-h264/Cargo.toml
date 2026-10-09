@@ -10,3 +10,7 @@ description = "Minimal H.264 bitstream parser for hardware decoder configuration
 poppy-core = { workspace = true }
 bytes = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+

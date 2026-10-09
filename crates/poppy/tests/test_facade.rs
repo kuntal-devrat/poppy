@@ -35,3 +35,18 @@ fn test_poppy_facade_end_to_end() {
         .expect("Expected rewind packet");
     assert_eq!(pkt_rewind.dts, 0);
 }
+
+#[test]
+fn test_h264_decode_frame_count() {
+    let mut stream = poppy::open("../../tests/samples/test_h264.mp4")
+        .or_else(|_| poppy::open("tests/samples/test_h264.mp4"))
+        .expect("Failed to open test_h264.mp4");
+
+    let mut count = 0;
+    while let Some(frame) = stream.next_frame().expect("next_frame failed") {
+        count += 1;
+        println!("Frame #{count}: pts={:?}", frame.pts);
+    }
+    println!("Total decoded frames from test_h264.mp4: {count}");
+    assert_eq!(count, 30);
+}

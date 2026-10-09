@@ -397,13 +397,98 @@ impl HvcCRecord {
     }
 }
 
+/// Errors when parsing an `av1C` record.
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
+pub enum Av1CParseError {
+    #[error("av1C data too short: need {need} bytes, have {have}")]
+    TooShort { need: usize, have: usize },
+    #[error("unsupported av1C version: {0} (expected 1)")]
+    UnsupportedVersion(u8),
+}
+
 /// Parsed contents of the `av1C` box (AV1 Codec ISO Media File Format Binding, §2.3).
-///
-/// Placeholder for Phase 5+ expansion. Currently stores raw extradata.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Av1CRecord {
-    /// Raw `av1C` box payload for future parsing.
+    pub marker: bool,
+    pub version: u8,
+    pub seq_profile: u8,
+    pub seq_level_idx: u8,
+    pub seq_tier: bool,
+    pub high_bitdepth: bool,
+    pub twelve_bit: bool,
+    pub monochrome: bool,
+    pub chroma_subsampling_x: bool,
+    pub chroma_subsampling_y: bool,
+    pub chroma_sample_position: u8,
+    pub initial_presentation_delay_present: bool,
+    pub initial_presentation_delay_minus_one: u8,
+    pub config_obus: Bytes,
     pub raw: Bytes,
+}
+
+impl Av1CRecord {
+    /// Parses an `av1C` box payload from raw bytes.
+    pub fn parse(data: &[u8]) -> Result<Self, Av1CParseError> {
+        if data.len() < 4 {
+            return Err(Av1CParseError::TooShort {
+                need: 4,
+                have: data.len(),
+            });
+        }
+
+        let marker = ((data[0] >> 7) & 1) != 0;
+        let version = data[0] & 0x7F;
+        if version != 1 {
+            return Err(Av1CParseError::UnsupportedVersion(version));
+        }
+
+        let seq_profile = (data[1] >> 5) & 0x07;
+        let seq_level_idx = data[1] & 0x1F;
+
+        let seq_tier = ((data[2] >> 7) & 1) != 0;
+        let high_bitdepth = ((data[2] >> 6) & 1) != 0;
+        let twelve_bit = ((data[2] >> 5) & 1) != 0;
+        let monochrome = ((data[2] >> 4) & 1) != 0;
+        let chroma_subsampling_x = ((data[2] >> 3) & 1) != 0;
+        let chroma_subsampling_y = ((data[2] >> 2) & 1) != 0;
+        let chroma_sample_position = data[2] & 0x03;
+
+        let initial_presentation_delay_present = ((data[3] >> 4) & 1) != 0;
+        let initial_presentation_delay_minus_one = if initial_presentation_delay_present {
+            data[3] & 0x0F
+        } else {
+            0
+        };
+
+        let config_obus = if data.len() > 4 {
+            Bytes::copy_from_slice(&data[4..])
+        } else {
+            Bytes::new()
+        };
+
+        Ok(Self {
+            marker,
+            version,
+            seq_profile,
+            seq_level_idx,
+            seq_tier,
+            high_bitdepth,
+            twelve_bit,
+            monochrome,
+            chroma_subsampling_x,
+            chroma_subsampling_y,
+            chroma_sample_position,
+            initial_presentation_delay_present,
+            initial_presentation_delay_minus_one,
+            config_obus,
+            raw: Bytes::copy_from_slice(data),
+        })
+    }
+
+    /// Returns `true` if this AV1 stream is 10-bit or 12-bit.
+    pub fn is_10bit(&self) -> bool {
+        self.high_bitdepth
+    }
 }
 
 /// Audio stream configuration extracted from the container.
@@ -526,5 +611,22 @@ mod tests {
     fn parse_avcc_too_short() {
         let result = AvcCRecord::parse(&[0x01, 0x64, 0x00]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_av1c_basic() {
+        let data: Vec<u8> = vec![
+            0x81, // marker=1, version=1
+            0x00, // seq_profile=0, seq_level_idx_0=0
+            0x0C, // tier=0, high_bitdepth=0, twelve_bit=0, mono=0, subsampling_x=1, subsampling_y=1, chroma_sample_pos=0
+            0x00, // delay_present=0, delay_minus_one=0
+            0x12, 0x00, // configOBUs: Temporal delimiter OBU
+        ];
+
+        let record = Av1CRecord::parse(&data).expect("should parse av1C");
+        assert_eq!(record.version, 1);
+        assert_eq!(record.seq_profile, 0);
+        assert!(!record.is_10bit());
+        assert_eq!(record.config_obus.len(), 2);
     }
 }
