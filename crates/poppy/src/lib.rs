@@ -17,6 +17,7 @@ pub use pipeline::MediaStream;
 pub use poppy_core as core;
 pub use poppy_demux as demux;
 pub use poppy_h264 as h264;
+pub use poppy_hevc as hevc;
 pub use poppy_hw as hw;
 pub use poppy_render as render;
 

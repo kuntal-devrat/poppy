@@ -274,13 +274,127 @@ pub enum AvcCParseError {
     ReservedNalLengthSize,
 }
 
-/// Parsed contents of the `hvcC` box (ISO 14496-15, §8.3.3.1).
-///
-/// Placeholder for Phase 5+ expansion. Currently stores raw extradata.
-#[derive(Debug, Clone)]
+/// Errors when parsing an `hvcC` record.
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
+pub enum HvcCParseError {
+    #[error("hvcC data too short: need {need} bytes, have {have}")]
+    TooShort { need: usize, have: usize },
+
+    #[error("unsupported hvcC configuration version: {0} (expected 1)")]
+    UnsupportedVersion(u8),
+}
+
+/// Parsed contents of the `hvcC` box (ISO/IEC 14496-15 §8.3.3.1).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HvcCRecord {
-    /// Raw `hvcC` box payload for future parsing.
+    pub profile_space: u8,
+    pub tier_flag: bool,
+    pub profile_idc: u8,
+    pub profile_compatibility: u32,
+    pub level_idc: u8,
+    pub chroma_format_idc: u8,
+    pub bit_depth_luma: u8,
+    pub bit_depth_chroma: u8,
+    pub nal_length_size: u8,
+    pub vps_list: Vec<Bytes>,
+    pub sps_list: Vec<Bytes>,
+    pub pps_list: Vec<Bytes>,
     pub raw: Bytes,
+}
+
+impl HvcCRecord {
+    /// Parses an `hvcC` box payload from bytes.
+    pub fn parse(data: &[u8]) -> Result<Self, HvcCParseError> {
+        if data.len() < 23 {
+            return Err(HvcCParseError::TooShort {
+                need: 23,
+                have: data.len(),
+            });
+        }
+
+        let configuration_version = data[0];
+        if configuration_version != 1 {
+            return Err(HvcCParseError::UnsupportedVersion(configuration_version));
+        }
+
+        let profile_space = (data[1] >> 6) & 0x03;
+        let tier_flag = (data[1] & 0x20) != 0;
+        let profile_idc = data[1] & 0x1F;
+        let profile_compatibility = u32::from_be_bytes([data[2], data[3], data[4], data[5]]);
+        let level_idc = data[12];
+        let chroma_format_idc = data[16] & 0x03;
+        let bit_depth_luma = (data[17] & 0x07) + 8;
+        let bit_depth_chroma = (data[18] & 0x07) + 8;
+        let nal_length_size = (data[21] & 0x03) + 1;
+        let num_arrays = data[22] as usize;
+
+        let mut vps_list = Vec::new();
+        let mut sps_list = Vec::new();
+        let mut pps_list = Vec::new();
+
+        let mut offset = 23;
+        for _ in 0..num_arrays {
+            if offset + 3 > data.len() {
+                return Err(HvcCParseError::TooShort {
+                    need: offset + 3,
+                    have: data.len(),
+                });
+            }
+
+            let nal_type = data[offset] & 0x3F;
+            let num_nalus = u16::from_be_bytes([data[offset + 1], data[offset + 2]]) as usize;
+            offset += 3;
+
+            for _ in 0..num_nalus {
+                if offset + 2 > data.len() {
+                    return Err(HvcCParseError::TooShort {
+                        need: offset + 2,
+                        have: data.len(),
+                    });
+                }
+
+                let nal_len = u16::from_be_bytes([data[offset], data[offset + 1]]) as usize;
+                offset += 2;
+
+                if offset + nal_len > data.len() {
+                    return Err(HvcCParseError::TooShort {
+                        need: offset + nal_len,
+                        have: data.len(),
+                    });
+                }
+
+                let nal_bytes = Bytes::copy_from_slice(&data[offset..offset + nal_len]);
+                match nal_type {
+                    32 => vps_list.push(nal_bytes),
+                    33 => sps_list.push(nal_bytes),
+                    34 => pps_list.push(nal_bytes),
+                    _ => {}
+                }
+                offset += nal_len;
+            }
+        }
+
+        Ok(Self {
+            profile_space,
+            tier_flag,
+            profile_idc,
+            profile_compatibility,
+            level_idc,
+            chroma_format_idc,
+            bit_depth_luma,
+            bit_depth_chroma,
+            nal_length_size,
+            vps_list,
+            sps_list,
+            pps_list,
+            raw: Bytes::copy_from_slice(data),
+        })
+    }
+
+    /// Returns `true` if this stream has 10-bit color depth.
+    pub fn is_10bit(&self) -> bool {
+        self.bit_depth_luma >= 10
+    }
 }
 
 /// Parsed contents of the `av1C` box (AV1 Codec ISO Media File Format Binding, §2.3).

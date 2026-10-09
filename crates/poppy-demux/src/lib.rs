@@ -13,6 +13,7 @@ pub mod bsf;
 pub mod ebml;
 pub mod isobmff;
 
+pub use bsf::{avcc_to_annex_b, hevc_to_annex_b};
 pub use ebml::MatroskaDemuxer;
 pub use isobmff::Mp4Demuxer;
 

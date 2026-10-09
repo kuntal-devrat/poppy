@@ -10,3 +10,6 @@ description = "Zero-copy GPU interop bridges (DMA-BUF to Vulkan/OpenGL) for Proj
 poppy-core = { workspace = true }
 poppy-hw = { workspace = true }
 thiserror = { workspace = true }
+wgpu = { workspace = true }
+bytemuck = { workspace = true }
+pollster = { workspace = true }

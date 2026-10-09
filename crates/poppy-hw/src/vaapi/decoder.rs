@@ -148,6 +148,8 @@ impl HwDecoder for VaapiH264Decoder {
                                 width: sps.display_width(),
                                 height: sps.display_height(),
                                 pixel_format: PixelFormat::Nv12,
+                                surface_id: rf.surface_id,
+                                data: None,
                             });
                         }
                     }
@@ -173,13 +175,15 @@ impl HwDecoder for VaapiH264Decoder {
                     let iq_matrix = VAIQMatrixBufferH264::default();
 
                     // Build VASliceParameterBufferH264
-                    let mut slice_param = VASliceParameterBufferH264::default();
-                    slice_param.slice_data_size = nal.len() as u32;
-                    slice_param.slice_data_offset = 0;
-                    slice_param.slice_data_bit_offset = slice.slice_data_bit_offset as u16;
-                    slice_param.first_mb_in_slice = slice.first_mb_in_slice as u16;
-                    slice_param.slice_type = slice.raw_slice_type as u8;
-                    slice_param.slice_qp_delta = slice.slice_qp_delta as i8;
+                    let mut slice_param = VASliceParameterBufferH264 {
+                        slice_data_size: nal.len() as u32,
+                        slice_data_offset: 0,
+                        slice_data_bit_offset: slice.slice_data_bit_offset as u16,
+                        first_mb_in_slice: slice.first_mb_in_slice as u16,
+                        slice_type: slice.raw_slice_type as u8,
+                        slice_qp_delta: slice.slice_qp_delta as i8,
+                        ..Default::default()
+                    };
                     self.dpb.fill_ref_pic_list0(cur_poc, &mut slice_param.ref_pic_list0);
 
                     // Submit buffers to hardware decoder ASIC
@@ -275,6 +279,8 @@ impl HwDecoder for VaapiH264Decoder {
                             width: sps.display_width(),
                             height: sps.display_height(),
                             pixel_format: PixelFormat::Nv12,
+                            surface_id: rf.surface_id,
+                            data: None,
                         });
                     }
 
@@ -285,6 +291,8 @@ impl HwDecoder for VaapiH264Decoder {
                             width: sps.display_width(),
                             height: sps.display_height(),
                             pixel_format: PixelFormat::Nv12,
+                            surface_id: target_surface,
+                            data: None,
                         });
                     }
 
@@ -309,6 +317,8 @@ impl HwDecoder for VaapiH264Decoder {
                 width: 1920,
                 height: 1080,
                 pixel_format: PixelFormat::Nv12,
+                surface_id: rf.surface_id,
+                data: None,
             });
         }
         Ok(())

@@ -10,6 +10,7 @@ description = "High-level ergonomic API facade for the Poppy media pipeline"
 poppy-core = { workspace = true }
 poppy-demux = { workspace = true }
 poppy-h264 = { workspace = true }
+poppy-hevc = { workspace = true }
 poppy-hw = { workspace = true }
 poppy-render = { workspace = true }
 bytes = { workspace = true }

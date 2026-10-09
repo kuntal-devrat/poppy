@@ -25,28 +25,60 @@ impl VaDevice {
     /// Discovers an available DRM render node (`/dev/dri/renderD*`) and initializes
     /// the VA-API display for H.264 VLD decoding.
     pub fn open_auto() -> Result<Self, HwError> {
-        let va = VaApi::load().map_err(|e| HwError::DeviceInitFailed(e))?;
+        Self::open_auto_for_profiles(&[
+            VA_PROFILE_H264_HIGH,
+            VA_PROFILE_H264_MAIN,
+            VA_PROFILE_H264_CONSTRAINED_BASELINE,
+            VA_PROFILE_H264_BASELINE,
+        ])
+    }
+
+    /// Discovers an available DRM render node and initializes VA-API for HEVC VLD decoding.
+    pub fn open_auto_hevc(is_10bit: bool) -> Result<Self, HwError> {
+        if is_10bit {
+            Self::open_auto_for_profiles(&[VA_PROFILE_HEVC_MAIN10])
+        } else {
+            Self::open_auto_for_profiles(&[VA_PROFILE_HEVC_MAIN, VA_PROFILE_HEVC_MAIN10])
+        }
+    }
+
+    /// Discovers an available DRM render node matching one of the desired profiles.
+    pub fn open_auto_for_profiles(desired_profiles: &[VAProfile]) -> Result<Self, HwError> {
+        let va = VaApi::load().map_err(HwError::DeviceInitFailed)?;
 
         // Scan DRM render nodes in order
         for num in 128..136 {
             let path = PathBuf::from(format!("/dev/dri/renderD{}", num));
-            if path.exists() {
-                if let Ok(dev) = Self::open_with_va(&path, Arc::clone(&va)) {
-                    return Ok(dev);
-                }
+            if path.exists()
+                && let Ok(dev) = Self::open_with_va_profiles(&path, Arc::clone(&va), desired_profiles)
+            {
+                return Ok(dev);
             }
         }
 
         Err(HwError::NoDeviceFound)
     }
 
-    /// Open a specific DRM device path.
+    /// Open a specific DRM device path for H.264.
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, HwError> {
-        let va = VaApi::load().map_err(|e| HwError::DeviceInitFailed(e))?;
-        Self::open_with_va(path.as_ref(), va)
+        let va = VaApi::load().map_err(HwError::DeviceInitFailed)?;
+        Self::open_with_va_profiles(
+            path.as_ref(),
+            va,
+            &[
+                VA_PROFILE_H264_HIGH,
+                VA_PROFILE_H264_MAIN,
+                VA_PROFILE_H264_CONSTRAINED_BASELINE,
+                VA_PROFILE_H264_BASELINE,
+            ],
+        )
     }
 
-    fn open_with_va(path: &Path, va: Arc<VaApi>) -> Result<Self, HwError> {
+    fn open_with_va_profiles(
+        path: &Path,
+        va: Arc<VaApi>,
+        desired_profiles: &[VAProfile],
+    ) -> Result<Self, HwError> {
         let drm_file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -85,18 +117,13 @@ impl VaDevice {
             }
             profiles.truncate(num_profiles as usize);
 
-            // Select best H.264 profile
-            let target_profile = if profiles.contains(&VA_PROFILE_H264_HIGH) {
-                VA_PROFILE_H264_HIGH
-            } else if profiles.contains(&VA_PROFILE_H264_MAIN) {
-                VA_PROFILE_H264_MAIN
-            } else if profiles.contains(&VA_PROFILE_H264_CONSTRAINED_BASELINE) {
-                VA_PROFILE_H264_CONSTRAINED_BASELINE
-            } else if profiles.contains(&VA_PROFILE_H264_BASELINE) {
-                VA_PROFILE_H264_BASELINE
-            } else {
-                let _ = (va.vaTerminate)(display);
-                return Err(HwError::UnsupportedCodec);
+            // Select best matching profile from desired list
+            let target_profile = match desired_profiles.iter().find(|&&p| profiles.contains(&p)) {
+                Some(&p) => p,
+                None => {
+                    let _ = (va.vaTerminate)(display);
+                    return Err(HwError::UnsupportedCodec);
+                }
             };
 
             // Create VAConfig for VLD decode

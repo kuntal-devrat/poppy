@@ -20,6 +20,7 @@ struct Tfhd {
     default_sample_duration: Option<u32>,
     default_sample_size: Option<u32>,
     default_sample_flags: Option<u32>,
+    #[allow(dead_code)]
     default_base_is_moof: bool,
 }
 
@@ -144,18 +145,16 @@ fn parse_traf(
             b"tfhd" => {
                 tfhd = Some(Tfhd::parse(body)?);
             }
-            b"tfdt" => {
-                if body.len() >= 8 {
-                    let version = body[0];
-                    if version == 1 && body.len() >= 12 {
-                        let dt = u64::from_be_bytes([
-                            body[4], body[5], body[6], body[7], body[8], body[9], body[10], body[11],
-                        ]);
-                        tfdt_decode_time = Some(dt);
-                    } else if version == 0 && body.len() >= 8 {
-                        let dt = u32::from_be_bytes([body[4], body[5], body[6], body[7]]) as u64;
-                        tfdt_decode_time = Some(dt);
-                    }
+            b"tfdt" if body.len() >= 8 => {
+                let version = body[0];
+                if version == 1 && body.len() >= 12 {
+                    let dt = u64::from_be_bytes([
+                        body[4], body[5], body[6], body[7], body[8], body[9], body[10], body[11],
+                    ]);
+                    tfdt_decode_time = Some(dt);
+                } else if version == 0 && body.len() >= 8 {
+                    let dt = u32::from_be_bytes([body[4], body[5], body[6], body[7]]) as u64;
+                    tfdt_decode_time = Some(dt);
                 }
             }
             _ => {}
@@ -173,13 +172,7 @@ fn parse_traf(
     };
 
     // Base data offset resolution (ISO 14496-12 §8.8.8)
-    let base_offset = if let Some(bdo) = tfhd.base_data_offset {
-        bdo
-    } else if tfhd.default_base_is_moof {
-        moof_offset
-    } else {
-        moof_offset
-    };
+    let base_offset = tfhd.base_data_offset.unwrap_or(moof_offset);
 
     // Track running DTS
     let mut current_dts = tfdt_decode_time.unwrap_or_else(|| {
@@ -276,7 +269,7 @@ fn parse_trun(
         };
 
         let sample_flags = if i == 0 && first_sample_flags.is_some() {
-            first_sample_flags.unwrap()
+            first_sample_flags.unwrap_or(0)
         } else if sample_flags_present {
             if cursor + 4 > body.len() {
                 return Err(DemuxError::UnexpectedEof { offset: 0 });

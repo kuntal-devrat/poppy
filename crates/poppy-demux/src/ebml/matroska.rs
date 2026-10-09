@@ -4,7 +4,7 @@ use std::fs::File;
 use std::path::Path;
 
 use bytes::Bytes;
-use poppy_core::codec::{AvcCRecord, CodecConfig, CodecId};
+use poppy_core::codec::{AvcCRecord, CodecConfig, CodecId, HvcCRecord};
 use poppy_core::{Packet, StreamInfo, TimeBase};
 
 use super::element::{read_uint, read_utf8, EbmlIter};
@@ -168,6 +168,8 @@ impl MatroskaDemuxer {
                                     ID_CODEC_PRIVATE => {
                                         if let Ok(avcc) = AvcCRecord::parse(entry_elem.payload) {
                                             codec_config = CodecConfig::H264(avcc);
+                                        } else if let Ok(hvcc) = HvcCRecord::parse(entry_elem.payload) {
+                                            codec_config = CodecConfig::Hevc(hvcc);
                                         }
                                     }
                                     ID_VIDEO_SETTINGS => {
@@ -211,21 +213,22 @@ impl MatroskaDemuxer {
                             // data...
                             let block_data = c_elem.payload;
                             if let Ok((trk, trk_len)) = read_vint_id(block_data, c_elem.offset) {
-                                if block_data.len() >= trk_len + 3 {
-                                    let rel_time = i16::from_be_bytes([block_data[trk_len], block_data[trk_len + 1]]) as i64;
-                                    let flags = block_data[trk_len + 2];
-                                    let is_keyframe = (flags & 0x80) != 0;
-
-                                    let payload_start = (c_elem.payload.as_ptr() as usize - data.as_ptr() as usize) + trk_len + 3;
-                                    let payload_len = block_data.len() - (trk_len + 3);
-
-                                    samples.push(MatroskaSample {
-                                        track_num: trk as u64,
-                                        timestamp_ticks: cluster_time + rel_time,
-                                        is_keyframe,
-                                        data_range: (payload_start, payload_len),
-                                    });
+                                if block_data.len() < trk_len + 3 {
+                                    continue;
                                 }
+                                let rel_time = i16::from_be_bytes([block_data[trk_len], block_data[trk_len + 1]]) as i64;
+                                let flags = block_data[trk_len + 2];
+                                let is_keyframe = (flags & 0x80) != 0;
+
+                                let payload_start = (c_elem.payload.as_ptr() as usize - data.as_ptr() as usize) + trk_len + 3;
+                                let payload_len = block_data.len() - (trk_len + 3);
+
+                                samples.push(MatroskaSample {
+                                    track_num: trk as u64,
+                                    timestamp_ticks: cluster_time + rel_time,
+                                    is_keyframe,
+                                    data_range: (payload_start, payload_len),
+                                });
                             }
                         }
                     }

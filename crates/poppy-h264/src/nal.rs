@@ -126,7 +126,7 @@ impl<'a> NalUnit<'a> {
 }
 
 /// Splits an Annex-B byte stream (`00 00 01` or `00 00 00 01` start codes) into NAL units.
-pub fn find_annex_b_nals<'a>(data: &'a [u8]) -> Vec<&'a [u8]> {
+pub fn find_annex_b_nals(data: &[u8]) -> Vec<&[u8]> {
     let mut nals = Vec::new();
     let mut i = 0;
     let mut start_indices = Vec::new();

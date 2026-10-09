@@ -6,7 +6,7 @@
 pub mod vaapi;
 
 #[cfg(target_os = "linux")]
-pub use vaapi::VaapiH264Decoder;
+pub use vaapi::{VaapiH264Decoder, VaapiHevcDecoder};
 
 use poppy_core::{Packet, PixelFormat};
 
@@ -30,12 +30,14 @@ pub enum HwError {
 }
 
 /// A decoded frame backed by a GPU surface or memory buffer.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DecodedFrame {
     pub pts: Option<i64>,
     pub width: u32,
     pub height: u32,
     pub pixel_format: PixelFormat,
+    pub surface_id: u32,
+    pub data: Option<Vec<u8>>,
 }
 
 /// Platform-agnostic hardware decoder interface.

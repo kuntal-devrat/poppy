@@ -3,7 +3,7 @@
 //! Parses `moov` → `trak` → `mdia` → `minf` → `stbl` to extract stream metadata,
 //! codec configuration (`avcC`, etc.), and reconstructed sample tables.
 
-use poppy_core::codec::{AvcCRecord, CodecConfig, CodecId};
+use poppy_core::codec::{AvcCRecord, CodecConfig, CodecId, HvcCRecord};
 use poppy_core::{StreamInfo, TimeBase};
 
 use super::box_reader::BoxHeader;
@@ -113,10 +113,10 @@ pub fn parse_moov(data: &[u8], file_offset: u64) -> Result<Vec<ParsedTrack>, Dem
 
     for res in BoxIter::new(data, file_offset) {
         let (header, body, offset) = res?;
-        if &header.box_type == b"trak" {
-            if let Some(track) = parse_trak(body, offset + header.header_size as u64)? {
-                tracks.push(track);
-            }
+        if &header.box_type == b"trak"
+            && let Some(track) = parse_trak(body, offset + header.header_size as u64)?
+        {
+            tracks.push(track);
         }
     }
 
@@ -366,13 +366,15 @@ fn parse_stsd(data: &[u8], file_offset: u64, handler_type: &[u8; 4]) -> Result<P
                 let child_boxes = &entry_payload[78..];
                 let child_offset = file_offset + (cursor + 8 + 78) as u64;
 
-                for c_res in BoxIter::new(child_boxes, child_offset) {
-                    if let Ok((c_header, c_body, _)) = c_res {
-                        if &c_header.box_type == b"avcC" {
-                            if let Ok(avcc) = AvcCRecord::parse(c_body) {
-                                codec_config = CodecConfig::H264(avcc);
-                            }
-                        }
+                for (c_header, c_body, _) in BoxIter::new(child_boxes, child_offset).flatten() {
+                    if &c_header.box_type == b"avcC"
+                        && let Ok(avcc) = AvcCRecord::parse(c_body)
+                    {
+                        codec_config = CodecConfig::H264(avcc);
+                    } else if &c_header.box_type == b"hvcC"
+                        && let Ok(hvcc) = HvcCRecord::parse(c_body)
+                    {
+                        codec_config = CodecConfig::Hevc(hvcc);
                     }
                 }
             } else if entry_payload.len() >= 20 {

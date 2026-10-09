@@ -221,8 +221,8 @@ impl Sps {
             let mult = if self.frame_mbs_only_flag { 1 } else { 2 };
             let crop_unit_y = match self.chroma_format_idc {
                 1 => 2 * mult, // 4:2:0
-                2 => 1 * mult, // 4:2:2
-                _ => 1 * mult,
+                2 => mult,     // 4:2:2
+                _ => mult,
             };
             height -= (crop.top + crop.bottom) * crop_unit_y;
         }

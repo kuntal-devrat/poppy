@@ -1,3 +1,4 @@
+#![allow(clippy::missing_transmute_annotations)]
 //! Safe Rust FFI definitions and dynamic loader for VA-API (`libva.so.2` & `libva-drm.so.2`).
 //!
 //! Direct x86_64/Linux C ABI matching `<va/va.h>`, `<va/va_drm.h>`, and `<va/va_dec_h264.h>`.
@@ -17,11 +18,14 @@ pub type VABufferType = c_int;
 
 pub const VA_STATUS_SUCCESS: VAStatus = 0;
 pub const VA_RT_FORMAT_YUV420: c_uint = 0x00000001;
+pub const VA_RT_FORMAT_YUV420_10: c_uint = 0x00000100;
 
 pub const VA_PROFILE_H264_BASELINE: VAProfile = 5;
 pub const VA_PROFILE_H264_MAIN: VAProfile = 6;
 pub const VA_PROFILE_H264_HIGH: VAProfile = 7;
 pub const VA_PROFILE_H264_CONSTRAINED_BASELINE: VAProfile = 21;
+pub const VA_PROFILE_HEVC_MAIN: VAProfile = 16;
+pub const VA_PROFILE_HEVC_MAIN10: VAProfile = 17;
 
 pub const VA_ENTRYPOINT_VLD: VAEntrypoint = 1;
 
@@ -108,7 +112,7 @@ impl Default for VAIQMatrixBufferH264 {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct VASliceParameterBufferH264 {
     pub slice_data_size: u32,
     pub slice_data_offset: u32,
@@ -142,39 +146,160 @@ pub struct VASliceParameterBufferH264 {
     pub chroma_offset_l1: [[i16; 2]; 32],
 }
 
-impl Default for VASliceParameterBufferH264 {
+pub const VA_PICTURE_HEVC_INVALID: c_uint = 0x00000001;
+pub const VA_PICTURE_HEVC_FIELD_PIC: c_uint = 0x00000002;
+pub const VA_PICTURE_HEVC_BOTTOM_FIELD: c_uint = 0x00000004;
+pub const VA_PICTURE_HEVC_SHORT_TERM_REFERENCE: c_uint = 0x00000008;
+pub const VA_PICTURE_HEVC_LONG_TERM_REFERENCE: c_uint = 0x00000010;
+pub const VA_PICTURE_HEVC_RPS_ST_CURR_BEFORE: c_uint = 0x00000020;
+pub const VA_PICTURE_HEVC_RPS_ST_CURR_AFTER: c_uint = 0x00000040;
+pub const VA_PICTURE_HEVC_RPS_LT_CURR: c_uint = 0x00000080;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VAPictureHEVC {
+    pub picture_id: VASurfaceID,
+    pub pic_order_cnt: c_int,
+    pub flags: c_uint,
+    pub va_reserved: [c_uint; 4],
+}
+
+impl Default for VAPictureHEVC {
     fn default() -> Self {
         Self {
-            slice_data_size: 0,
-            slice_data_offset: 0,
-            slice_data_flag: 0,
-            slice_data_bit_offset: 0,
-            first_mb_in_slice: 0,
-            slice_type: 0,
-            direct_spatial_mv_pred_flag: 0,
-            num_ref_idx_l0_active_minus1: 0,
-            num_ref_idx_l1_active_minus1: 0,
-            cabac_init_idc: 0,
-            slice_qp_delta: 0,
-            disable_deblocking_filter_idc: 0,
-            slice_alpha_c0_offset_div2: 0,
-            slice_beta_offset_div2: 0,
-            ref_pic_list0: [VAPictureH264::default(); 32],
-            ref_pic_list1: [VAPictureH264::default(); 32],
-            luma_log2_weight_denom: 0,
-            chroma_log2_weight_denom: 0,
-            luma_weight_l0_flag: 0,
-            luma_weight_l0: [0; 32],
-            luma_offset_l0: [0; 32],
-            chroma_weight_l0_flag: 0,
-            chroma_weight_l0: [[0; 2]; 32],
-            chroma_offset_l0: [[0; 2]; 32],
-            luma_weight_l1_flag: 0,
-            luma_weight_l1: [0; 32],
-            luma_offset_l1: [0; 32],
-            chroma_weight_l1_flag: 0,
-            chroma_weight_l1: [[0; 2]; 32],
-            chroma_offset_l1: [[0; 2]; 32],
+            picture_id: VA_INVALID_SURFACE,
+            pic_order_cnt: 0,
+            flags: VA_PICTURE_HEVC_INVALID,
+            va_reserved: [0; 4],
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct VAPictureParameterBufferHEVC {
+    pub curr_pic: VAPictureHEVC,
+    pub reference_frames: [VAPictureHEVC; 15],
+    pub pic_width_in_luma_samples: u16,
+    pub pic_height_in_luma_samples: u16,
+    pub pic_fields: u32,
+    pub sps_max_dec_pic_buffering_minus1: u8,
+    pub bit_depth_luma_minus8: u8,
+    pub bit_depth_chroma_minus8: u8,
+    pub pcm_sample_bit_depth_luma_minus1: u8,
+    pub pcm_sample_bit_depth_chroma_minus1: u8,
+    pub log2_min_luma_coding_block_size_minus3: u8,
+    pub log2_diff_max_min_luma_coding_block_size: u8,
+    pub log2_min_transform_block_size_minus2: u8,
+    pub log2_diff_max_min_transform_block_size: u8,
+    pub log2_min_pcm_luma_coding_block_size_minus3: u8,
+    pub log2_diff_max_min_pcm_luma_coding_block_size: u8,
+    pub max_transform_hierarchy_depth_intra: u8,
+    pub max_transform_hierarchy_depth_inter: u8,
+    pub init_qp_minus26: i8,
+    pub diff_cu_qp_delta_depth: u8,
+    pub pps_cb_qp_offset: i8,
+    pub pps_cr_qp_offset: i8,
+    pub log2_parallel_merge_level_minus2: u8,
+    pub num_tile_columns_minus1: u8,
+    pub num_tile_rows_minus1: u8,
+    pub column_width_minus1: [u16; 19],
+    pub row_height_minus1: [u16; 21],
+    pub slice_parsing_fields: u32,
+    pub log2_max_pic_order_cnt_lsb_minus4: u8,
+    pub num_short_term_ref_pic_sets: u8,
+    pub num_long_term_ref_pic_sps: u8,
+    pub num_ref_idx_l0_default_active_minus1: u8,
+    pub num_ref_idx_l1_default_active_minus1: u8,
+    pub pps_beta_offset_div2: i8,
+    pub pps_tc_offset_div2: i8,
+    pub num_extra_slice_header_bits: u8,
+    pub st_rps_bits: u32,
+    pub va_reserved: [u32; 8],
+}
+
+impl Default for VAPictureParameterBufferHEVC {
+    fn default() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct VASliceParameterBufferHEVC {
+    pub slice_data_size: u32,
+    pub slice_data_offset: u32,
+    pub slice_data_flag: u32,
+    pub slice_data_byte_offset: u32,
+    pub slice_segment_address: u32,
+    pub ref_pic_list: [[u8; 15]; 2],
+    pub long_slice_flags: u32,
+    pub collocated_ref_idx: u8,
+    pub num_ref_idx_l0_active_minus1: u8,
+    pub num_ref_idx_l1_active_minus1: u8,
+    pub slice_qp_delta: i8,
+    pub slice_cb_qp_offset: i8,
+    pub slice_cr_qp_offset: i8,
+    pub slice_beta_offset_div2: i8,
+    pub slice_tc_offset_div2: i8,
+    pub luma_log2_weight_denom: u8,
+    pub delta_chroma_log2_weight_denom: i8,
+    pub delta_luma_weight_l0: [i8; 15],
+    pub luma_offset_l0: [i8; 15],
+    pub delta_chroma_weight_l0: [[i8; 2]; 15],
+    pub chroma_offset_l0: [[i8; 2]; 15],
+    pub delta_luma_weight_l1: [i8; 15],
+    pub luma_offset_l1: [i8; 15],
+    pub delta_chroma_weight_l1: [[i8; 2]; 15],
+    pub chroma_offset_l1: [[i8; 2]; 15],
+    pub five_minus_max_num_merge_cand: u8,
+    pub num_entry_point_offsets: u16,
+    pub entry_offset_to_subset_array: u16,
+    pub slice_data_num_emu_prevn_bytes: u16,
+    pub va_reserved: [u32; 2],
+}
+
+impl Default for VASliceParameterBufferHEVC {
+    fn default() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_hevc_struct_sizes() {
+        println!("size_of VAPictureParameterBufferHEVC = {}", std::mem::size_of::<VAPictureParameterBufferHEVC>());
+        println!("size_of VASliceParameterBufferHEVC = {}", std::mem::size_of::<VASliceParameterBufferHEVC>());
+        assert_eq!(std::mem::size_of::<VAPictureParameterBufferHEVC>(), 604);
+        assert_eq!(std::mem::size_of::<VASliceParameterBufferHEVC>(), 264);
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct VAIQMatrixBufferHEVC {
+    pub scaling_list4x4: [[u8; 16]; 6],
+    pub scaling_list8x8: [[u8; 64]; 6],
+    pub scaling_list16x16: [[u8; 64]; 6],
+    pub scaling_list32x32: [[u8; 64]; 2],
+    pub scaling_list_dc16x16: [u8; 6],
+    pub scaling_list_dc32x32: [u8; 2],
+    pub va_reserved: [u32; 4],
+}
+
+impl Default for VAIQMatrixBufferHEVC {
+    fn default() -> Self {
+        Self {
+            scaling_list4x4: [[16; 16]; 6],
+            scaling_list8x8: [[16; 64]; 6],
+            scaling_list16x16: [[16; 64]; 6],
+            scaling_list32x32: [[16; 64]; 2],
+            scaling_list_dc16x16: [16; 6],
+            scaling_list_dc32x32: [16; 2],
+            va_reserved: [0; 4],
         }
     }
 }

@@ -63,7 +63,7 @@ impl Pps {
                         let _bottom_right = r.read_ue()?;
                     }
                 }
-                3 | 4 | 5 => {
+                3..=5 => {
                     let _slice_group_change_direction_flag = r.read_bit()?;
                     let _slice_group_change_rate = r.read_ue()?;
                 }

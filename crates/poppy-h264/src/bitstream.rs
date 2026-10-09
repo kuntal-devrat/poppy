@@ -136,7 +136,7 @@ impl<'a> BitReader<'a> {
         }
 
         if code_num % 2 == 1 {
-            Ok(((code_num + 1) / 2) as i32)
+            Ok(code_num.div_ceil(2) as i32)
         } else {
             Ok(-((code_num / 2) as i32))
         }

@@ -5,11 +5,11 @@
 
 use std::path::Path;
 
-use poppy_core::{CodecId, Packet, StreamInfo};
+use poppy_core::{codec::CodecConfig, CodecId, Packet, StreamInfo};
 use poppy_demux::{Demuxer, MatroskaDemuxer, Mp4Demuxer};
 use poppy_hw::{DecodedFrame, HwDecoder};
 #[cfg(target_os = "linux")]
-use poppy_hw::VaapiH264Decoder;
+use poppy_hw::{VaapiH264Decoder, VaapiHevcDecoder};
 
 use crate::error::PoppyError;
 
@@ -18,6 +18,8 @@ pub struct MediaStream {
     demuxer: Box<dyn Demuxer>,
     decoder: Option<Box<dyn HwDecoder>>,
     target_stream_index: usize,
+    codec: CodecId,
+    config: CodecConfig,
 }
 
 impl MediaStream {
@@ -59,8 +61,10 @@ impl MediaStream {
         }
 
         let stream_info = &demuxer.streams()[target_stream_index];
+        let codec = stream_info.codec;
+        let config = stream_info.config.clone();
 
-        // Attempt hardware decoder creation if video stream is H.264
+        // Attempt hardware decoder creation for primary video track
         #[cfg(target_os = "linux")]
         let decoder: Option<Box<dyn HwDecoder>> = if stream_info.codec == CodecId::H264 {
             if let Ok(mut dec) = VaapiH264Decoder::new() {
@@ -96,6 +100,59 @@ impl MediaStream {
             } else {
                 None
             }
+        } else if stream_info.codec == CodecId::Hevc {
+            let is_10bit = if let poppy_core::codec::CodecConfig::Hevc(hvcc) = &stream_info.config {
+                hvcc.is_10bit()
+            } else {
+                false
+            };
+
+            if let Ok(mut dec) = VaapiHevcDecoder::new(is_10bit) {
+                if let poppy_core::codec::CodecConfig::Hevc(hvcc) = &stream_info.config {
+                    for vps in &hvcc.vps_list {
+                        let mut data = vec![0, 0, 0, 1];
+                        data.extend_from_slice(vps);
+                        let pkt = Packet {
+                            stream_index: target_stream_index,
+                            pts: None,
+                            dts: 0,
+                            duration: 0,
+                            data: bytes::Bytes::from(data),
+                            is_keyframe: false,
+                        };
+                        let _ = dec.submit_packet(&pkt);
+                    }
+                    for sps in &hvcc.sps_list {
+                        let mut data = vec![0, 0, 0, 1];
+                        data.extend_from_slice(sps);
+                        let pkt = Packet {
+                            stream_index: target_stream_index,
+                            pts: None,
+                            dts: 0,
+                            duration: 0,
+                            data: bytes::Bytes::from(data),
+                            is_keyframe: false,
+                        };
+                        let _ = dec.submit_packet(&pkt);
+                    }
+                    for pps in &hvcc.pps_list {
+                        let mut data = vec![0, 0, 0, 1];
+                        data.extend_from_slice(pps);
+                        let pkt = Packet {
+                            stream_index: target_stream_index,
+                            pts: None,
+                            dts: 0,
+                            duration: 0,
+                            data: bytes::Bytes::from(data),
+                            is_keyframe: false,
+                        };
+                        let _ = dec.submit_packet(&pkt);
+                    }
+                }
+                Some(Box::new(dec) as Box<dyn HwDecoder>)
+            } else {
+                None
+            }
         } else {
             None
         };
@@ -107,10 +164,14 @@ impl MediaStream {
             demuxer,
             decoder,
             target_stream_index,
+            codec,
+            config,
         })
     }
 
     /// Access metadata for all streams in the media container.
+    /// Internal filter to convert container length-prefixed NALs to Annex-B format.
+    #[allow(dead_code)]
     pub fn streams(&self) -> &[StreamInfo] {
         self.demuxer.streams()
     }
@@ -126,6 +187,9 @@ impl MediaStream {
     /// Pulls compressed packets from the container and feeds them directly
     /// to the GPU decode ASIC until a frame is produced or end-of-stream is reached.
     pub fn next_frame(&mut self) -> Result<Option<DecodedFrame>, PoppyError> {
+        let codec = self.codec;
+        let config = &self.config;
+        let target_stream_index = self.target_stream_index;
         let decoder = match &mut self.decoder {
             Some(d) => d,
             None => return Ok(None),
@@ -140,7 +204,8 @@ impl MediaStream {
             // Demux next packet
             match self.demuxer.read_packet()? {
                 Some(pkt) => {
-                    if pkt.stream_index == self.target_stream_index {
+                    if pkt.stream_index == target_stream_index {
+                        let pkt = filter_to_annex_b(codec, config, pkt)?;
                         decoder.submit_packet(&pkt)?;
                     }
                 }
@@ -161,5 +226,54 @@ impl MediaStream {
             d.flush()?;
         }
         Ok(())
+    }
+}
+
+/// Internal helper to transform container length-prefixed NALs to Annex-B format.
+fn filter_to_annex_b(codec: CodecId, config: &CodecConfig, pkt: Packet) -> Result<Packet, PoppyError> {
+    if pkt.data.starts_with(&[0, 0, 0, 1]) || pkt.data.starts_with(&[0, 0, 1]) {
+        return Ok(pkt);
+    }
+
+    match (codec, config) {
+        (CodecId::H264, CodecConfig::H264(avcc)) => {
+            let mut out = Vec::new();
+            poppy_demux::bsf::avcc_to_annex_b(
+                &pkt.data,
+                avcc.nal_length_size,
+                None,
+                &mut out,
+            )
+            .map_err(|e| PoppyError::Hardware(poppy_hw::HwError::DecodeError(e.to_string())))?;
+            Ok(Packet {
+                stream_index: pkt.stream_index,
+                pts: pkt.pts,
+                dts: pkt.dts,
+                duration: pkt.duration,
+                data: bytes::Bytes::from(out),
+                is_keyframe: pkt.is_keyframe,
+            })
+        }
+        (CodecId::Hevc, CodecConfig::Hevc(hvcc)) => {
+            let mut out = Vec::new();
+            poppy_demux::bsf::hevc_to_annex_b(
+                &pkt.data,
+                hvcc.nal_length_size,
+                None,
+                None,
+                None,
+                &mut out,
+            )
+            .map_err(|e| PoppyError::Hardware(poppy_hw::HwError::DecodeError(e.to_string())))?;
+            Ok(Packet {
+                stream_index: pkt.stream_index,
+                pts: pkt.pts,
+                dts: pkt.dts,
+                duration: pkt.duration,
+                data: bytes::Bytes::from(out),
+                is_keyframe: pkt.is_keyframe,
+            })
+        }
+        _ => Ok(pkt),
     }
 }

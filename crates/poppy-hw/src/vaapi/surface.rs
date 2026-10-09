@@ -36,6 +36,7 @@ pub struct SurfacePool {
     pub height: u32,
 }
 
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 impl SurfacePool {
     /// Allocate `count` surfaces of format NV12 (`VA_RT_FORMAT_YUV420`) and create a decode context.
     pub fn new(
@@ -46,12 +47,25 @@ impl SurfacePool {
         height: u32,
         count: usize,
     ) -> Result<Self, HwError> {
+        Self::new_with_format(va, display, config_id, width, height, count, VA_RT_FORMAT_YUV420)
+    }
+
+    /// Allocate `count` surfaces with a specified runtime pixel format (NV12 or P010).
+    pub fn new_with_format(
+        va: Arc<VaApi>,
+        display: VADisplay,
+        config_id: VAConfigID,
+        width: u32,
+        height: u32,
+        count: usize,
+        rt_format: std::ffi::c_uint,
+    ) -> Result<Self, HwError> {
         let mut surfaces = vec![0 as VASurfaceID; count];
 
         unsafe {
             let status = (va.vaCreateSurfaces)(
                 display,
-                VA_RT_FORMAT_YUV420,
+                rt_format,
                 width,
                 height,
                 surfaces.as_mut_ptr(),

@@ -4,6 +4,7 @@ members = [
     "crates/poppy-core",
     "crates/poppy-demux",
     "crates/poppy-h264",
+    "crates/poppy-hevc",
     "crates/poppy-hw",
     "crates/poppy-render",
     "crates/poppy",
@@ -11,7 +12,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/kuntal-devrat/poppy"
@@ -35,3 +36,7 @@ tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 libc = "0.2"
+wgpu = "24"
+pollster = "1.0"
+bytemuck = { version = "1", features = ["derive"] }
+poppy-hevc = { path = "crates/poppy-hevc" }
