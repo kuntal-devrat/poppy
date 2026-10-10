@@ -91,6 +91,16 @@ fn test_c_abi_full_pipeline_on_real_video() {
         assert_eq!(poppy_get_duration_seconds(stream, &mut dur), POPPY_OK);
         assert!(dur > 0.0);
 
+        let has_hw = poppy_has_hardware_decoder(stream);
+        assert!(has_hw >= 0);
+        if has_hw == 0 {
+            println!(
+                "Skipping C ABI frame decode assertions: no hardware decoder available on this system"
+            );
+            assert_eq!(poppy_close(stream), POPPY_OK);
+            return;
+        }
+
         // Read first frame
         let mut frame: *mut PoppyFrame = std::ptr::null_mut();
         let frame_res = poppy_read_frame(stream, &mut frame);

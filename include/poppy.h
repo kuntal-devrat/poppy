@@ -113,6 +113,14 @@ int32_t poppy_get_duration_seconds(const PoppyStream* stream, double* out_second
  */
 int32_t poppy_get_codec_name(const PoppyStream* stream, char* buffer, size_t buffer_size);
 
+/**
+ * @brief Returns whether the stream has an active hardware decoder bound.
+ *
+ * @param stream Valid PoppyStream handle.
+ * @return 1 if hardware accelerated, 0 if demuxing-only/no GPU, or negative error code.
+ */
+int32_t poppy_has_hardware_decoder(const PoppyStream* stream);
+
 /* ========================================================================= */
 /* Decoding and Seeking                                                      */
 /* ========================================================================= */

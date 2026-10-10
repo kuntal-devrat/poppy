@@ -64,6 +64,11 @@ async fn test_tokio_stream_iteration_and_backpressure() {
         .await
         .expect("open async stream");
 
+    if !async_stream.has_hardware_decoder() {
+        println!("Skipping stream decode: no hardware decoder available on this system");
+        return;
+    }
+
     let mut frame_count = 0;
     while let Some(frame_result) = async_stream.next().await {
         let frame = frame_result.expect("decode frame in async stream");
@@ -109,6 +114,11 @@ async fn test_async_seeking_and_draining() {
     }
 
     let mut async_stream = poppy::open_async(path).await.expect("open async stream");
+
+    if !async_stream.has_hardware_decoder() {
+        println!("Skipping async seek decode: no hardware decoder available on this system");
+        return;
+    }
 
     // Read initial frame
     let first_frame = async_stream
@@ -162,6 +172,11 @@ async fn test_frame_scrubbing_timeline_and_step() {
     }
 
     let mut async_stream = poppy::open_async(path).await.expect("open async stream");
+
+    if !async_stream.has_hardware_decoder() {
+        println!("Skipping scrubbing decode: no hardware decoder available on this system");
+        return;
+    }
 
     // Scrub to 0.5 seconds
     let scrub_frame = async_stream
@@ -222,13 +237,17 @@ async fn test_async_multiformat_hevc_and_av1() {
 
     if Path::new(hevc_path).exists() {
         let mut hevc_stream = poppy::open_async(hevc_path).await.expect("open HEVC async");
-        let f = hevc_stream
-            .next_frame()
-            .await
-            .expect("decode HEVC")
-            .expect("frame");
-        assert!(f.width > 0);
-        println!("✅ HEVC async decoding verified ({}x{})", f.width, f.height);
+        if hevc_stream.has_hardware_decoder() {
+            let f = hevc_stream
+                .next_frame()
+                .await
+                .expect("decode HEVC")
+                .expect("frame");
+            assert!(f.width > 0);
+            println!("✅ HEVC async decoding verified ({}x{})", f.width, f.height);
+        } else {
+            println!("Skipping HEVC async decode: no hardware decoder available");
+        }
     }
 
     let av1_candidates = [
@@ -247,12 +266,16 @@ async fn test_async_multiformat_hevc_and_av1() {
 
     if Path::new(av1_path).exists() {
         let mut av1_stream = poppy::open_async(av1_path).await.expect("open AV1 async");
-        let f = av1_stream
-            .next_frame()
-            .await
-            .expect("decode AV1")
-            .expect("frame");
-        assert!(f.width > 0);
-        println!("✅ AV1 async decoding verified ({}x{})", f.width, f.height);
+        if av1_stream.has_hardware_decoder() {
+            let f = av1_stream
+                .next_frame()
+                .await
+                .expect("decode AV1")
+                .expect("frame");
+            assert!(f.width > 0);
+            println!("✅ AV1 async decoding verified ({}x{})", f.width, f.height);
+        } else {
+            println!("Skipping AV1 async decode: no hardware decoder available");
+        }
     }
 }

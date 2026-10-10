@@ -281,6 +281,20 @@ pub unsafe extern "C" fn poppy_get_codec_name(
     POPPY_OK
 }
 
+/// Returns whether the stream has an active hardware decoder bound.
+/// Returns 1 if true, 0 if false, or a negative error code if null.
+///
+/// # Safety
+/// `stream` must point to an open, valid `PoppyStream`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn poppy_has_hardware_decoder(stream: *const PoppyStream) -> c_int {
+    if stream.is_null() {
+        return POPPY_ERR_NULL_PTR;
+    }
+    let s = unsafe { &*stream };
+    if s.inner.has_hardware_decoder() { 1 } else { 0 }
+}
+
 /// Decodes the next hardware-accelerated video frame from the stream.
 ///
 /// Returns `POPPY_OK` on success, or `POPPY_ERR_EOF` when the stream has ended.

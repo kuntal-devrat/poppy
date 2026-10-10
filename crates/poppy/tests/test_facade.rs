@@ -42,6 +42,11 @@ fn test_h264_decode_frame_count() {
         .or_else(|_| poppy::open("tests/samples/test_h264.mp4"))
         .expect("Failed to open test_h264.mp4");
 
+    if !stream.has_hardware_decoder() {
+        println!("Skipping decode: no hardware decoder available on this system");
+        return;
+    }
+
     let mut count = 0;
     while let Some(frame) = stream.next_frame().expect("next_frame failed") {
         count += 1;

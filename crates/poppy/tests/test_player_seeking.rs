@@ -27,6 +27,13 @@ fn test_media_stream_seeking_and_timing() {
     let dur = duration.unwrap();
     assert!(dur > 0.0);
 
+    if !stream.has_hardware_decoder() {
+        println!(
+            "Skipping seeking decode assertions: no hardware decoder available on this system"
+        );
+        return;
+    }
+
     // Read first frame
     let frame1 = stream.next_frame().expect("next_frame failed");
     assert!(frame1.is_some());

@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 use bytes::Bytes;
 use poppy_core::{CodecId, InterlaceMode, Packet, PixelFormat};
 use poppy_demux::{Demuxer, Mp4Demuxer};

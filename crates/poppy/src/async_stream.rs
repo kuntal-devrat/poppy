@@ -48,6 +48,7 @@ pub struct AsyncMediaStream {
     codec: CodecId,
     time_base: TimeBase,
     duration_ticks: Option<i64>,
+    has_hardware_decoder: bool,
     worker_handle: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -68,6 +69,7 @@ impl AsyncMediaStream {
         let codec = sync_stream.codec();
         let time_base = sync_stream.time_base();
         let duration_ticks = sync_stream.duration_ticks();
+        let has_hardware_decoder = sync_stream.has_hardware_decoder();
 
         let (frame_tx, frame_rx) = mpsc::channel(builder.buffer_capacity);
         let (cmd_tx, cmd_rx) = mpsc::channel(16);
@@ -88,6 +90,7 @@ impl AsyncMediaStream {
             codec,
             time_base,
             duration_ticks,
+            has_hardware_decoder,
             worker_handle: Some(worker_handle),
         })
     }
@@ -228,6 +231,11 @@ impl AsyncMediaStream {
     /// Active stream index being demuxed and decoded.
     pub fn target_stream_index(&self) -> usize {
         self.target_stream_index
+    }
+
+    /// Indicates whether a hardware decoder is actively bound to this stream.
+    pub fn has_hardware_decoder(&self) -> bool {
+        self.has_hardware_decoder
     }
 
     /// Gracefully closes the stream worker.

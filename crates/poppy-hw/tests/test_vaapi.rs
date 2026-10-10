@@ -1,7 +1,8 @@
+#![cfg(target_os = "linux")]
+
 use poppy_hw::vaapi::{SurfacePool, VaDevice};
 
 #[test]
-#[cfg(target_os = "linux")]
 fn test_vaapi_hardware_init_and_dmabuf_export() {
     let dev = match VaDevice::open_auto() {
         Ok(d) => d,

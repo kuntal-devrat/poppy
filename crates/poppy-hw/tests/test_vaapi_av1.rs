@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 use poppy_core::CodecId;
 use poppy_demux::{Demuxer, Mp4Demuxer};
 use poppy_hw::{HwDecoder, VaapiAv1Decoder};

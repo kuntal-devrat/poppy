@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 use bytes::Bytes;
 use poppy_core::Packet;
 use poppy_hw::{HwDecoder, VaapiHevcDecoder};
