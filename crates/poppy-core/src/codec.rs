@@ -143,9 +143,17 @@ pub struct AvcCRecord {
 
     /// Picture Parameter Set NAL units (without start codes or length prefixes).
     pub pps_list: Vec<Bytes>,
+
+    /// Raw unparsed avcC box payload bytes.
+    pub raw: Bytes,
 }
 
 impl AvcCRecord {
+    /// Return the raw byte representation of the avcC record.
+    #[inline]
+    pub fn raw_data(&self) -> &[u8] {
+        &self.raw
+    }
     /// Parse an `avcC` box payload from raw bytes.
     ///
     /// The input should be the box body (after the box header), starting
@@ -250,6 +258,7 @@ impl AvcCRecord {
             offset += pps_len;
         }
 
+        let raw = Bytes::copy_from_slice(data);
         Ok(Self {
             profile_idc,
             profile_compatibility,
@@ -257,6 +266,7 @@ impl AvcCRecord {
             nal_length_size,
             sps_list,
             pps_list,
+            raw,
         })
     }
 }
@@ -303,6 +313,12 @@ pub struct HvcCRecord {
 }
 
 impl HvcCRecord {
+    /// Return the raw byte representation of the hvcC record.
+    #[inline]
+    pub fn raw_data(&self) -> &[u8] {
+        &self.raw
+    }
+
     /// Parses an `hvcC` box payload from bytes.
     pub fn parse(data: &[u8]) -> Result<Self, HvcCParseError> {
         if data.len() < 23 {

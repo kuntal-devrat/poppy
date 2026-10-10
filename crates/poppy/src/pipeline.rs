@@ -209,10 +209,13 @@ impl MediaStream {
                 if let Ok(mut dec) = poppy_hw::D3D12VideoDecoder::new(stream_info.codec) {
                     match &stream_info.config {
                         poppy_core::codec::CodecConfig::H264(avcc) => {
-                            let _ = dec.set_extradata(&avcc.raw_data);
+                            let _ = dec.set_extradata(&avcc.raw);
                         }
                         poppy_core::codec::CodecConfig::Hevc(hvcc) => {
-                            let _ = dec.set_extradata(&hvcc.raw_data);
+                            let _ = dec.set_extradata(&hvcc.raw);
+                        }
+                        poppy_core::codec::CodecConfig::Av1(av1c) => {
+                            let _ = dec.set_extradata(&av1c.config_obus);
                         }
                         _ => {}
                     }
@@ -226,10 +229,13 @@ impl MediaStream {
                 if let Ok(mut dec) = poppy_hw::VideoToolboxDecoder::new(stream_info.codec) {
                     match &stream_info.config {
                         poppy_core::codec::CodecConfig::H264(avcc) => {
-                            let _ = dec.set_extradata(&avcc.raw_data);
+                            let _ = dec.set_extradata(&avcc.raw);
                         }
                         poppy_core::codec::CodecConfig::Hevc(hvcc) => {
-                            let _ = dec.set_extradata(&hvcc.raw_data);
+                            let _ = dec.set_extradata(&hvcc.raw);
+                        }
+                        poppy_core::codec::CodecConfig::Av1(av1c) => {
+                            let _ = dec.set_extradata(&av1c.config_obus);
                         }
                         _ => {}
                     }
