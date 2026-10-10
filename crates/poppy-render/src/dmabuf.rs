@@ -1,6 +1,12 @@
 //! Linux DMA-BUF (Direct Memory Access Buffer) descriptors and direct Vulkan zero-copy import.
 
+#[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+
+#[cfg(not(unix))]
+pub type RawFd = i32;
+
+#[cfg(target_os = "linux")]
 use std::sync::Arc;
 
 use crate::RenderError;
@@ -20,7 +26,10 @@ pub struct DmaBufPlane {
 #[derive(Debug)]
 pub struct DmaBufImage {
     /// File descriptor representing the backing GPU VRAM allocation.
+    #[cfg(unix)]
     pub fd: OwnedFd,
+    #[cfg(not(unix))]
+    pub fd: RawFd,
     /// DRM pixel format FourCC (e.g. `DRM_FORMAT_NV12` = 0x3231564e).
     pub drm_format: u32,
     /// DRM format modifier (e.g. `DRM_FORMAT_MOD_LINEAR` = 0, or Intel/AMD tiling modifier).
@@ -49,7 +58,10 @@ impl DmaBufImage {
             ));
         }
 
+        #[cfg(unix)]
         let fd = unsafe { OwnedFd::from_raw_fd(raw_fd) };
+        #[cfg(not(unix))]
+        let fd = raw_fd;
 
         Ok(Self {
             fd,
@@ -64,14 +76,27 @@ impl DmaBufImage {
     /// Access the underlying raw file descriptor.
     #[inline]
     pub fn raw_fd(&self) -> RawFd {
-        self.fd.as_raw_fd()
+        #[cfg(unix)]
+        {
+            self.fd.as_raw_fd()
+        }
+        #[cfg(not(unix))]
+        {
+            self.fd
+        }
     }
 }
 
 impl From<&DmaBufDescriptor> for DmaBufImage {
     fn from(desc: &DmaBufDescriptor) -> Self {
-        let dup_fd = unsafe { libc::dup(desc.fd) };
-        let owned_fd = unsafe { OwnedFd::from_raw_fd(dup_fd) };
+        #[cfg(unix)]
+        let owned_fd = {
+            let dup_fd = unsafe { libc::dup(desc.fd) };
+            unsafe { OwnedFd::from_raw_fd(dup_fd) }
+        };
+        #[cfg(not(unix))]
+        let owned_fd = desc.fd;
+
         let mut planes = Vec::new();
         for (i, &offset) in desc.offsets.iter().enumerate() {
             let stride = desc.pitches.get(i).copied().unwrap_or(0);
