@@ -323,12 +323,57 @@ impl D3D12VideoDecoder {
 
         Ok(())
     }
+
+    fn decode_hevc_packet(&mut self, packet: &Packet) -> Result<(), HwError> {
+        let pool = match &self.pool {
+            Some(p) => p,
+            None => return Ok(()),
+        };
+
+        let (width, height, is_10bit) =
+            if let Some(sps) = self.active_hevc_sps.and_then(|id| self.hevc_sps.get(&id)) {
+                (
+                    sps.pic_width_in_luma_samples,
+                    sps.pic_height_in_luma_samples,
+                    sps.is_10bit(),
+                )
+            } else {
+                (pool.width, pool.height, self.is_10bit)
+            };
+
+        let surface = &pool.surfaces[self.cur_surface_idx];
+        let dxgi_handle = pool.export_shared_handle(surface.id);
+
+        let pixel_format = if is_10bit {
+            PixelFormat::P010
+        } else {
+            PixelFormat::Nv12
+        };
+
+        self.output_queue.push_back(DecodedFrame {
+            pts: packet.pts.or(Some(packet.dts)),
+            width,
+            height,
+            pixel_format,
+            surface_id: surface.id,
+            data: None,
+            interlace_mode: InterlaceMode::Progressive,
+            dmabuf: None,
+            dxgi_handle,
+            cv_pixel_buffer: None,
+            is_concealed: false,
+        });
+
+        self.cur_surface_idx = (self.cur_surface_idx + 1) % pool.surfaces.len();
+        Ok(())
+    }
 }
 
 impl HwDecoder for D3D12VideoDecoder {
     fn submit_packet(&mut self, packet: &Packet) -> Result<(), HwError> {
         match self.codec {
             CodecId::H264 => self.decode_h264_packet(packet),
+            CodecId::Hevc => self.decode_hevc_packet(packet),
             _ => Ok(()),
         }
     }

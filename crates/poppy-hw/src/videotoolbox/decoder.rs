@@ -266,12 +266,62 @@ impl VideoToolboxDecoder {
 
         Ok(())
     }
+
+    fn decode_hevc_packet(&mut self, packet: &Packet) -> Result<(), HwError> {
+        let (width, height, is_10bit) =
+            if let Some(sps) = self.active_hevc_sps.and_then(|id| self.hevc_sps.get(&id)) {
+                (sps.cropped_width(), sps.cropped_height(), sps.is_10bit())
+            } else {
+                (self.width, self.height, self.is_10bit)
+            };
+
+        if width == 0 || height == 0 {
+            return Ok(());
+        }
+
+        let ptr_base = BUFFER_PTR_COUNTER.fetch_add(0x1000, Ordering::Relaxed);
+        let pixel_format = if is_10bit {
+            PixelFormat::P010
+        } else {
+            PixelFormat::Nv12
+        };
+        let pixel_format_type = if is_10bit {
+            K_CV_PIXEL_FORMAT_TYPE_420_YP_CB_CR10_BI_PLANAR_VIDEO_RANGE
+        } else {
+            K_CV_PIXEL_FORMAT_TYPE_420_YP_CB_CR8_BI_PLANAR_VIDEO_RANGE
+        };
+
+        let cv_pixel_buffer = Some(CvPixelBufferDescriptor {
+            pixel_buffer_ptr: ptr_base,
+            io_surface_ptr: ptr_base + 0x100,
+            width,
+            height,
+            pixel_format_type,
+        });
+
+        self.output_queue.push_back(DecodedFrame {
+            pts: packet.pts.or(Some(packet.dts)),
+            width,
+            height,
+            pixel_format,
+            surface_id: (ptr_base & 0xFFFF) as u32,
+            data: None,
+            interlace_mode: InterlaceMode::Progressive,
+            dmabuf: None,
+            dxgi_handle: None,
+            cv_pixel_buffer,
+            is_concealed: false,
+        });
+
+        Ok(())
+    }
 }
 
 impl HwDecoder for VideoToolboxDecoder {
     fn submit_packet(&mut self, packet: &Packet) -> Result<(), HwError> {
         match self.codec {
             CodecId::H264 => self.decode_h264_packet(packet),
+            CodecId::Hevc => self.decode_hevc_packet(packet),
             _ => Ok(()),
         }
     }
