@@ -219,18 +219,21 @@ impl HwDecoder for VaapiHevcDecoder {
             if first_nut.is_idr() {
                 let released = self.dpb.clear_on_idr();
                 for rf in released {
+                    let w = sps.cropped_width();
+                    let h = sps.cropped_height();
                     let dmabuf = pool.export_dmabuf_descriptor(rf.surface_id).ok();
+                    let data = pool.read_surface_data(rf.surface_id, w, h).ok();
                     self.output_queue.push_back(DecodedFrame {
                         pts: rf.pts,
-                        width: sps.cropped_width(),
-                        height: sps.cropped_height(),
+                        width: w,
+                        height: h,
                         pixel_format: if self.is_10bit {
                             PixelFormat::P010
                         } else {
                             PixelFormat::Nv12
                         },
                         surface_id: rf.surface_id,
-                        data: None,
+                        data,
                         interlace_mode: InterlaceMode::Progressive,
                         dmabuf,
                         dxgi_handle: None,
@@ -253,6 +256,9 @@ impl HwDecoder for VaapiHevcDecoder {
                     let bumped = self.dpb.frames.remove(min_idx);
                     if bumped.needed_for_output {
                         let dmabuf = pool.export_dmabuf_descriptor(bumped.surface_id).ok();
+                        let data = pool
+                            .read_surface_data(bumped.surface_id, bumped.width, bumped.height)
+                            .ok();
                         self.output_queue.push_back(DecodedFrame {
                             pts: bumped.pts,
                             width: bumped.width,
@@ -263,7 +269,7 @@ impl HwDecoder for VaapiHevcDecoder {
                                 PixelFormat::Nv12
                             },
                             surface_id: bumped.surface_id,
-                            data: None,
+                            data,
                             interlace_mode: bumped.interlace_mode,
                             dmabuf,
                             dxgi_handle: None,
@@ -721,6 +727,9 @@ impl HwDecoder for VaapiHevcDecoder {
 
             for rf in released {
                 let dmabuf = pool.export_dmabuf_descriptor(rf.surface_id).ok();
+                let data = pool
+                    .read_surface_data(rf.surface_id, rf.width, rf.height)
+                    .ok();
                 self.output_queue.push_back(DecodedFrame {
                     pts: rf.pts,
                     width: rf.width,
@@ -731,7 +740,7 @@ impl HwDecoder for VaapiHevcDecoder {
                         PixelFormat::Nv12
                     },
                     surface_id: rf.surface_id,
-                    data: None,
+                    data,
                     interlace_mode: rf.interlace_mode,
                     dmabuf,
                     dxgi_handle: None,
@@ -755,6 +764,10 @@ impl HwDecoder for VaapiHevcDecoder {
                 .pool
                 .as_ref()
                 .and_then(|p| p.export_dmabuf_descriptor(rf.surface_id).ok());
+            let data = self
+                .pool
+                .as_ref()
+                .and_then(|p| p.read_surface_data(rf.surface_id, rf.width, rf.height).ok());
             self.output_queue.push_back(DecodedFrame {
                 pts: rf.pts,
                 width: rf.width,
@@ -765,7 +778,7 @@ impl HwDecoder for VaapiHevcDecoder {
                     PixelFormat::Nv12
                 },
                 surface_id: rf.surface_id,
-                data: None,
+                data,
                 interlace_mode: rf.interlace_mode,
                 dmabuf,
                 dxgi_handle: None,

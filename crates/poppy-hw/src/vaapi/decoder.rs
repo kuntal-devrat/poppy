@@ -323,13 +323,16 @@ impl HwDecoder for VaapiH264Decoder {
                 let released = self.dpb.clear_on_idr();
                 for rf in released {
                     let dmabuf = pool.export_dmabuf_descriptor(rf.surface_id).ok();
+                    let data = pool
+                        .read_surface_data(rf.surface_id, rf.width, rf.height)
+                        .ok();
                     self.output_queue.push_back(DecodedFrame {
                         pts: rf.pts,
                         width: rf.width,
                         height: rf.height,
                         pixel_format: PixelFormat::Nv12,
                         surface_id: rf.surface_id,
-                        data: None,
+                        data,
                         interlace_mode: rf.interlace_mode,
                         dmabuf,
                         dxgi_handle: None,
@@ -573,13 +576,16 @@ impl HwDecoder for VaapiH264Decoder {
 
             for rf in released {
                 let dmabuf = pool.export_dmabuf_descriptor(rf.surface_id).ok();
+                let data = pool
+                    .read_surface_data(rf.surface_id, rf.width, rf.height)
+                    .ok();
                 self.output_queue.push_back(DecodedFrame {
                     pts: rf.pts,
                     width: rf.width,
                     height: rf.height,
                     pixel_format: PixelFormat::Nv12,
                     surface_id: rf.surface_id,
-                    data: None,
+                    data,
                     interlace_mode: rf.interlace_mode,
                     dmabuf,
                     dxgi_handle: None,
@@ -605,13 +611,17 @@ impl HwDecoder for VaapiH264Decoder {
                 .pool
                 .as_ref()
                 .and_then(|p| p.export_dmabuf_descriptor(rf.surface_id).ok());
+            let data = self
+                .pool
+                .as_ref()
+                .and_then(|p| p.read_surface_data(rf.surface_id, rf.width, rf.height).ok());
             self.output_queue.push_back(DecodedFrame {
                 pts: rf.pts,
                 width: rf.width,
                 height: rf.height,
                 pixel_format: PixelFormat::Nv12,
                 surface_id: rf.surface_id,
-                data: None,
+                data,
                 interlace_mode: rf.interlace_mode,
                 dmabuf,
                 dxgi_handle: None,

@@ -530,6 +530,10 @@ impl VaapiAv1Decoder {
                 .pool
                 .as_ref()
                 .and_then(|p| p.export_dmabuf_descriptor(target_surface).ok());
+            let data = self.pool.as_ref().and_then(|p| {
+                p.read_surface_data(target_surface, fh.frame_width, fh.frame_height)
+                    .ok()
+            });
             self.output_queue.push_back(DecodedFrame {
                 pts,
                 width: fh.frame_width,
@@ -540,7 +544,7 @@ impl VaapiAv1Decoder {
                     PixelFormat::Nv12
                 },
                 surface_id: target_surface,
-                data: None,
+                data,
                 interlace_mode: InterlaceMode::Progressive,
                 dmabuf,
                 dxgi_handle: None,
@@ -578,21 +582,27 @@ impl HwDecoder for VaapiAv1Decoder {
                             let idx = fh.frame_to_show_map_idx as usize;
                             if idx < 8 && self.dpb_slots[idx] != VA_INVALID_ID {
                                 let surf_id = self.dpb_slots[idx];
+                                let width = fh.frame_width.max(seq.max_frame_width);
+                                let height = fh.frame_height.max(seq.max_frame_height);
                                 let dmabuf = self
                                     .pool
                                     .as_ref()
                                     .and_then(|p| p.export_dmabuf_descriptor(surf_id).ok());
+                                let data = self
+                                    .pool
+                                    .as_ref()
+                                    .and_then(|p| p.read_surface_data(surf_id, width, height).ok());
                                 self.output_queue.push_back(DecodedFrame {
                                     pts: packet.pts.or(Some(packet.dts)),
-                                    width: fh.frame_width.max(seq.max_frame_width),
-                                    height: fh.frame_height.max(seq.max_frame_height),
+                                    width,
+                                    height,
                                     pixel_format: if self.is_10bit {
                                         PixelFormat::P010
                                     } else {
                                         PixelFormat::Nv12
                                     },
                                     surface_id: surf_id,
-                                    data: None,
+                                    data,
                                     interlace_mode: InterlaceMode::Progressive,
                                     dmabuf,
                                     dxgi_handle: None,

@@ -28,8 +28,14 @@ fn test_vaapi_hardware_init_and_dmabuf_export() {
         .derive_image(pool.surfaces[0])
         .expect("Failed to derive image from surface");
     println!(
-        "✅ Derived VAImage: format fourcc={:#x}, size={}x{}, data_size={}, num_planes={}",
-        img.format.fourcc, img.width, img.height, img.data_size, img.num_planes
+        "✅ Derived VAImage: format fourcc={:#x}, bpp={}, depth={}, size={}x{}, data_size={}, num_planes={}",
+        img.format.fourcc,
+        img.format.bits_per_pixel,
+        img.format.depth,
+        img.width,
+        img.height,
+        img.data_size,
+        img.num_planes
     );
     assert_eq!(img.width, 1920);
     assert_eq!(img.height, 1080);
@@ -44,4 +50,15 @@ fn test_vaapi_hardware_init_and_dmabuf_export() {
 
     // Clean up derived image
     pool.destroy_image(&img);
+
+    // Read surface data directly into host memory
+    let data = pool
+        .read_surface_data(pool.surfaces[0], 1920, 1080)
+        .expect("Failed to read surface data into host memory");
+    let expected_len = 1920 * 1080 + 1920 * (1080 / 2);
+    assert_eq!(data.len(), expected_len);
+    println!(
+        "✅ Read surface data successfully: {} bytes (NV12 tightly packed)",
+        data.len()
+    );
 }

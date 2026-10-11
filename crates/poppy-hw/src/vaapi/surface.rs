@@ -261,6 +261,100 @@ impl SurfacePool {
             Ok(buf_info.handle as i32)
         }
     }
+
+    /// Reads decoded pixel data from a hardware surface into host memory (NV12 or P010).
+    pub fn read_surface_data(
+        &self,
+        surface_id: VASurfaceID,
+        width: u32,
+        height: u32,
+    ) -> Result<Vec<u8>, HwError> {
+        unsafe {
+            let status = (self.va.vaSyncSurface)(self.display, surface_id);
+            if status != VA_STATUS_SUCCESS {
+                return Err(HwError::DecodeError(format!(
+                    "vaSyncSurface failed: {}",
+                    self.va.err_str(status)
+                )));
+            }
+        }
+
+        let img = self.derive_image(surface_id)?;
+        let mut buf_ptr: *mut std::ffi::c_void = std::ptr::null_mut();
+        unsafe {
+            let status = (self.va.vaMapBuffer)(self.display, img.buf, &mut buf_ptr);
+            if status != VA_STATUS_SUCCESS {
+                self.destroy_image(&img);
+                return Err(HwError::DecodeError(format!(
+                    "vaMapBuffer failed: {}",
+                    self.va.err_str(status)
+                )));
+            }
+
+            let eff_width = if width > 0 {
+                (width as usize).min(img.width as usize)
+            } else {
+                img.width as usize
+            };
+            let eff_height = if height > 0 {
+                (height as usize).min(img.height as usize)
+            } else {
+                img.height as usize
+            };
+            let ptr = buf_ptr as *const u8;
+
+            let is_10bit =
+                img.format.fourcc == u32::from_le_bytes(*b"P010") || img.format.bits_per_pixel > 16;
+
+            let bytes_per_pixel_luma = if is_10bit { 2 } else { 1 };
+            let row_bytes_y = eff_width * bytes_per_pixel_luma;
+            let row_bytes_uv = eff_width * bytes_per_pixel_luma;
+
+            let uv_height = eff_height.div_ceil(2);
+            let mut out = Vec::with_capacity(row_bytes_y * eff_height + row_bytes_uv * uv_height);
+
+            let y_offset = if img.num_planes > 0 {
+                img.offsets[0] as usize
+            } else {
+                0
+            };
+            let y_pitch = if img.num_planes > 0 && img.pitches[0] > 0 {
+                img.pitches[0] as usize
+            } else {
+                row_bytes_y
+            };
+
+            let uv_offset = if img.num_planes > 1 {
+                img.offsets[1] as usize
+            } else {
+                y_offset + y_pitch * eff_height
+            };
+            let uv_pitch = if img.num_planes > 1 && img.pitches[1] > 0 {
+                img.pitches[1] as usize
+            } else {
+                row_bytes_uv
+            };
+
+            // Copy Y plane
+            for row in 0..eff_height {
+                let src_row = ptr.add(y_offset + row * y_pitch);
+                let slice = std::slice::from_raw_parts(src_row, row_bytes_y);
+                out.extend_from_slice(slice);
+            }
+
+            // Copy UV plane
+            for row in 0..uv_height {
+                let src_row = ptr.add(uv_offset + row * uv_pitch);
+                let slice = std::slice::from_raw_parts(src_row, row_bytes_uv);
+                out.extend_from_slice(slice);
+            }
+
+            let _ = (self.va.vaUnmapBuffer)(self.display, img.buf);
+            self.destroy_image(&img);
+
+            Ok(out)
+        }
+    }
 }
 
 impl Drop for SurfacePool {
