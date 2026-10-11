@@ -294,6 +294,33 @@ impl GpuRenderer {
         color_space: ColorSpace,
         target_view: &wgpu::TextureView,
     ) -> Result<(), RenderError> {
+        self.render_nv12_to_view_with_viewport(
+            y_plane,
+            uv_plane,
+            width,
+            height,
+            stride_y,
+            stride_uv,
+            color_space,
+            target_view,
+            None,
+        )
+    }
+
+    /// Renders an NV12 frame directly into a target `wgpu::TextureView` with an optional viewport (for letterboxing).
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_nv12_to_view_with_viewport(
+        &self,
+        y_plane: &[u8],
+        uv_plane: &[u8],
+        width: u32,
+        height: u32,
+        stride_y: u32,
+        stride_uv: u32,
+        color_space: ColorSpace,
+        target_view: &wgpu::TextureView,
+        viewport: Option<(f32, f32, f32, f32)>,
+    ) -> Result<(), RenderError> {
         self.update_uniform(color_space);
 
         let uv_width = width.div_ceil(2);
@@ -419,6 +446,10 @@ impl GpuRenderer {
                 occlusion_query_set: None,
             });
 
+            if let Some((x, y, w, h)) = viewport {
+                render_pass.set_viewport(x, y, w, h, 0.0, 1.0);
+            }
+
             render_pass.set_pipeline(&self.pipeline.pipeline_nv12);
             render_pass.set_bind_group(0, &bind_group, &[]);
             render_pass.draw(0..3, 0..1);
@@ -483,6 +514,33 @@ impl GpuRenderer {
         stride_uv: u32,
         color_space: ColorSpace,
         target_view: &wgpu::TextureView,
+    ) -> Result<(), RenderError> {
+        self.render_p010_to_view_with_viewport(
+            y_plane,
+            uv_plane,
+            width,
+            height,
+            stride_y,
+            stride_uv,
+            color_space,
+            target_view,
+            None,
+        )
+    }
+
+    /// Renders a P010 (10-bit HDR) frame directly into an arbitrary target texture view with optional viewport.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_p010_to_view_with_viewport(
+        &self,
+        y_plane: &[u16],
+        uv_plane: &[u16],
+        width: u32,
+        height: u32,
+        stride_y: u32,
+        stride_uv: u32,
+        color_space: ColorSpace,
+        target_view: &wgpu::TextureView,
+        viewport: Option<(f32, f32, f32, f32)>,
     ) -> Result<(), RenderError> {
         if !self
             .device
@@ -619,6 +677,10 @@ impl GpuRenderer {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
+
+            if let Some((x, y, w, h)) = viewport {
+                render_pass.set_viewport(x, y, w, h, 0.0, 1.0);
+            }
 
             render_pass.set_pipeline(&self.pipeline.pipeline_p010);
             render_pass.set_bind_group(0, &bind_group, &[]);
@@ -757,6 +819,26 @@ impl GpuRenderer {
         is_p010: bool,
         target_view: &wgpu::TextureView,
     ) -> Result<(), RenderError> {
+        self.render_textures_to_view_with_viewport(
+            y_texture,
+            uv_texture,
+            color_space,
+            is_p010,
+            target_view,
+            None,
+        )
+    }
+
+    /// Renders imported zero-copy planar textures directly into a target texture view with optional viewport.
+    pub fn render_textures_to_view_with_viewport(
+        &self,
+        y_texture: &wgpu::Texture,
+        uv_texture: &wgpu::Texture,
+        color_space: ColorSpace,
+        is_p010: bool,
+        target_view: &wgpu::TextureView,
+        viewport: Option<(f32, f32, f32, f32)>,
+    ) -> Result<(), RenderError> {
         self.update_uniform(color_space);
 
         let y_view = y_texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -807,6 +889,10 @@ impl GpuRenderer {
                 occlusion_query_set: None,
             });
 
+            if let Some((x, y, w, h)) = viewport {
+                render_pass.set_viewport(x, y, w, h, 0.0, 1.0);
+            }
+
             let pipeline = if is_p010 {
                 &self.pipeline.pipeline_p010
             } else {
@@ -830,6 +916,16 @@ impl GpuRenderer {
         frame: &DecodedFrame,
         target_view: &wgpu::TextureView,
     ) -> Result<(), RenderError> {
+        self.render_frame_to_view_with_viewport(frame, target_view, None)
+    }
+
+    /// Renders a decoded frame directly to an arbitrary target texture view with an optional viewport (for letterboxing).
+    pub fn render_frame_to_view_with_viewport(
+        &self,
+        frame: &DecodedFrame,
+        target_view: &wgpu::TextureView,
+        viewport: Option<(f32, f32, f32, f32)>,
+    ) -> Result<(), RenderError> {
         // 1. Direct Vulkan Zero-Copy DMA-BUF PRIME path (Linux)
         if let Some(ref dmabuf_desc) = frame.dmabuf
             && let Ok(imported) = crate::dmabuf::import_dmabuf_zero_copy(
@@ -842,12 +938,13 @@ impl GpuRenderer {
                 PixelFormat::P010 => ColorSpace::Bt2020Limited,
                 _ => ColorSpace::Bt709Limited,
             };
-            return self.render_textures_to_view(
+            return self.render_textures_to_view_with_viewport(
                 &imported.y_texture,
                 &imported.uv_texture,
                 color_space,
                 frame.pixel_format == PixelFormat::P010,
                 target_view,
+                viewport,
             );
         }
 
@@ -860,12 +957,13 @@ impl GpuRenderer {
                 PixelFormat::P010 => ColorSpace::Bt2020Limited,
                 _ => ColorSpace::Bt709Limited,
             };
-            return self.render_textures_to_view(
+            return self.render_textures_to_view_with_viewport(
                 &imported.y_texture,
                 &imported.uv_texture,
                 color_space,
                 frame.pixel_format == PixelFormat::P010,
                 target_view,
+                viewport,
             );
         }
 
@@ -881,12 +979,13 @@ impl GpuRenderer {
                 PixelFormat::P010 => ColorSpace::Bt2020Limited,
                 _ => ColorSpace::Bt709Limited,
             };
-            return self.render_textures_to_view(
+            return self.render_textures_to_view_with_viewport(
                 &imported.y_texture,
                 &imported.uv_texture,
                 color_space,
                 frame.pixel_format == PixelFormat::P010,
                 target_view,
+                viewport,
             );
         }
 
@@ -909,7 +1008,7 @@ impl GpuRenderer {
                 let y_plane = &data[..y_size];
                 let uv_plane = &data[y_size..y_size + uv_size];
 
-                self.render_nv12_to_view(
+                self.render_nv12_to_view_with_viewport(
                     y_plane,
                     uv_plane,
                     frame.width,
@@ -918,6 +1017,7 @@ impl GpuRenderer {
                     frame.width,
                     ColorSpace::Bt709Limited,
                     target_view,
+                    viewport,
                 )
             }
             PixelFormat::P010 => {
@@ -932,7 +1032,7 @@ impl GpuRenderer {
                 let y_plane = &u16_slice[..y_len];
                 let uv_plane = &u16_slice[y_len..y_len + uv_len];
 
-                self.render_p010_to_view(
+                self.render_p010_to_view_with_viewport(
                     y_plane,
                     uv_plane,
                     frame.width,
@@ -941,6 +1041,7 @@ impl GpuRenderer {
                     frame.width,
                     ColorSpace::Bt2020Limited,
                     target_view,
+                    viewport,
                 )
             }
             _ => Err(RenderError::UnsupportedFormat(format!(

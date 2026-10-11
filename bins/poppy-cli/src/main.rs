@@ -12,7 +12,7 @@ mod player;
 #[derive(Parser, Debug)]
 #[command(
     name = "poppy",
-    version = "1.0.0",
+    version = "0.5.0",
     about = "🌸 Poppy — Modern media pipeline inspector, zero-copy GPU decoder, and wgpu player"
 )]
 struct Cli {

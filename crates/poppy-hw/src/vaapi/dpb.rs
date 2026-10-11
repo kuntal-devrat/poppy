@@ -148,6 +148,7 @@ impl Dpb {
                     },
                     top_field_order_cnt: f.poc,
                     bottom_field_order_cnt: f.poc,
+                    va_reserved: [0; 4],
                 };
             } else {
                 *slot = VAPictureH264::default();
@@ -187,6 +188,7 @@ impl Dpb {
                     flags: VA_PICTURE_H264_SHORT_TERM_REFERENCE,
                     top_field_order_cnt: f.poc,
                     bottom_field_order_cnt: f.poc,
+                    va_reserved: [0; 4],
                 };
             } else {
                 *slot = VAPictureH264::default();
@@ -226,6 +228,7 @@ impl Dpb {
                     flags: VA_PICTURE_H264_SHORT_TERM_REFERENCE,
                     top_field_order_cnt: f.poc,
                     bottom_field_order_cnt: f.poc,
+                    va_reserved: [0; 4],
                 };
             } else {
                 *slot = VAPictureH264::default();

@@ -1,6 +1,7 @@
 //! Real-time interactive desktop video player using `winit` and `wgpu`.
 
 use std::path::{Path, PathBuf};
+use std::process::Child;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -34,6 +35,16 @@ pub struct VideoPlayerApp {
     video_height: u32,
     frame_count: u64,
     last_status_print: Instant,
+
+    // Synchronized companion audio playback
+    audio_process: Option<Child>,
+    has_audio_stream: bool,
+}
+
+impl Drop for VideoPlayerApp {
+    fn drop(&mut self) {
+        self.stop_audio();
+    }
 }
 
 impl VideoPlayerApp {
@@ -56,10 +67,12 @@ impl VideoPlayerApp {
             video_height: 720,
             frame_count: 0,
             last_status_print: Instant::now(),
+            audio_process: None,
+            has_audio_stream: false,
         }
     }
 
-    /// Read next frame from the hardware decoder, or loop/stay on pause.
+    /// Read next frame from the hardware decoder.
     fn advance_frame(&mut self) -> Result<bool, Box<dyn std::error::Error>> {
         let stream = match &mut self.stream {
             Some(s) => s,
@@ -85,6 +98,62 @@ impl VideoPlayerApp {
         (self.current_pts_sec - self.first_pts_sec).max(0.0)
     }
 
+    /// Starts or seeks companion audio process.
+    fn start_audio(&mut self, start_seconds: f64) {
+        if !self.has_audio_stream {
+            return;
+        }
+        self.stop_audio();
+
+        let pos_str = format!("{:.3}", start_seconds.max(0.0));
+        let spawn_res = std::process::Command::new("ffplay")
+            .args(["-nodisp", "-vn", "-autoexit", "-loglevel", "error", "-ss"])
+            .arg(&pos_str)
+            .arg(&self.file_path)
+            .spawn();
+
+        match spawn_res {
+            Ok(child) => {
+                self.audio_process = Some(child);
+            }
+            Err(_) => {
+                // Silently fallback if ffplay is not installed on system PATH
+            }
+        }
+    }
+
+    /// Pauses companion audio playback process.
+    fn pause_audio(&mut self) {
+        if let Some(child) = &mut self.audio_process {
+            #[cfg(unix)]
+            unsafe {
+                let _ = libc::kill(child.id() as i32, libc::SIGSTOP);
+            }
+            #[cfg(not(unix))]
+            let _ = child.kill();
+        }
+    }
+
+    /// Resumes companion audio playback process.
+    fn resume_audio(&mut self) {
+        #[cfg(unix)]
+        if let Some(child) = &mut self.audio_process {
+            unsafe {
+                let _ = libc::kill(child.id() as i32, libc::SIGCONT);
+            }
+            return;
+        }
+        self.start_audio(self.relative_position());
+    }
+
+    /// Stops and terminates companion audio playback process.
+    fn stop_audio(&mut self) {
+        if let Some(mut child) = self.audio_process.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+
     /// Seek forward or backward by `delta_seconds`.
     fn seek_relative(&mut self, delta_seconds: f64) {
         let current_rel = self.relative_position();
@@ -106,9 +175,43 @@ impl VideoPlayerApp {
         self.paused_at_position = target;
         self.playback_start = Some(Instant::now());
         let _ = self.advance_frame();
+
+        if !self.is_paused {
+            self.start_audio(target);
+        } else {
+            self.stop_audio();
+        }
+
         if let Some(w) = &self.window {
             w.request_redraw();
         }
+    }
+
+    /// Compute letterboxed/pillarboxed viewport preserving video native aspect ratio.
+    fn compute_viewport(&self) -> Option<(f32, f32, f32, f32)> {
+        let config = self.surface_config.as_ref()?;
+        let win_w = config.width as f32;
+        let win_h = config.height as f32;
+        if win_w <= 0.0 || win_h <= 0.0 || self.video_width == 0 || self.video_height == 0 {
+            return None;
+        }
+
+        let video_aspect = self.video_width as f32 / self.video_height as f32;
+        let window_aspect = win_w / win_h;
+
+        let (vp_x, vp_y, vp_w, vp_h) = if window_aspect > video_aspect {
+            // Window is wider than video -> pillarbox (black bars left and right)
+            let w = win_h * video_aspect;
+            let x = (win_w - w) * 0.5;
+            (x, 0.0, w, win_h)
+        } else {
+            // Window is taller than video -> letterbox (black bars top and bottom)
+            let h = win_w / video_aspect;
+            let y = (win_h - h) * 0.5;
+            (0.0, y, win_w, h)
+        };
+
+        Some((vp_x.round(), vp_y.round(), vp_w.round(), vp_h.round()))
     }
 
     fn print_hud(&mut self) {
@@ -131,10 +234,49 @@ impl VideoPlayerApp {
             .map(|f| format!("{}", f.pixel_format))
             .unwrap_or_else(|| "Unknown".to_string());
 
+        let audio_indicator = if self.has_audio_stream {
+            "🔊 Audio: Sync"
+        } else {
+            "🔇 No Audio"
+        };
+
         println!(
-            "[{state_str}] {cur_str} / {dur_str} | Size: {}x{} | Format: {fmt_str} | Frame #{:04}",
+            "[{state_str}] {cur_str} / {dur_str} | Size: {}x{} | Format: {fmt_str} | {audio_indicator} | Frame #{:04}",
             self.video_width, self.video_height, self.frame_count
         );
+    }
+
+    /// Schedule event loop wake-up for the next video frame timestamp.
+    fn schedule_next_wake(&self, event_loop: &ActiveEventLoop) {
+        if self.is_paused {
+            event_loop.set_control_flow(ControlFlow::Wait);
+            return;
+        }
+
+        let start = match self.playback_start {
+            Some(s) => s,
+            None => {
+                event_loop.set_control_flow(ControlFlow::Poll);
+                return;
+            }
+        };
+
+        let elapsed = start.elapsed().as_secs_f64();
+        let target_pos = self.paused_at_position + elapsed;
+        let cur_rel = self.relative_position();
+
+        if cur_rel <= target_pos {
+            // Next frame is due right now
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+            event_loop.set_control_flow(ControlFlow::Poll);
+        } else {
+            // Sleep until the current frame presentation duration expires
+            let wait_secs = cur_rel - target_pos;
+            let wake_at = Instant::now() + Duration::from_secs_f64(wait_secs.max(0.001));
+            event_loop.set_control_flow(ControlFlow::WaitUntil(wake_at));
+        }
     }
 }
 
@@ -155,6 +297,7 @@ impl ApplicationHandler for VideoPlayerApp {
         };
 
         self.duration_sec = stream.duration_seconds();
+        self.has_audio_stream = stream.streams().iter().any(|s| s.is_audio());
 
         // Peek first frame to get natural dimensions
         let (initial_w, initial_h) = match stream.next_frame() {
@@ -234,13 +377,20 @@ impl ApplicationHandler for VideoPlayerApp {
             eprintln!("⚠️ Failed to match surface output format: {e}");
         }
 
+        // Strict VSync mode eliminates screen tearing
+        let present_mode = if caps.present_modes.contains(&wgpu::PresentMode::Fifo) {
+            wgpu::PresentMode::Fifo
+        } else {
+            caps.present_modes[0]
+        };
+
         let inner_size = window.inner_size();
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
             width: inner_size.width.max(1),
             height: inner_size.height.max(1),
-            present_mode: wgpu::PresentMode::AutoVsync,
+            present_mode,
             desired_maximum_frame_latency: 2,
             alpha_mode: caps.alpha_modes[0],
             view_formats: vec![],
@@ -249,9 +399,15 @@ impl ApplicationHandler for VideoPlayerApp {
         surface.configure(&renderer.device, &config);
 
         println!(
-            "📺 Window created: {}x{} (Surface: {:?})",
-            inner_size.width, inner_size.height, surface_format
+            "📺 Window created: {}x{} (Surface: {:?}, VSync: {:?})",
+            inner_size.width, inner_size.height, surface_format, present_mode
         );
+        if self.has_audio_stream {
+            println!("🔊 Audio stream detected: companion audio playback enabled");
+            self.start_audio(0.0);
+        } else {
+            println!("🔇 No audio stream present in container");
+        }
         println!(
             "⌨️  Controls: [Space] Pause/Play | [Left/Right] Seek ±5s | [R] Replay | [Q/Esc] Quit\n"
         );
@@ -276,6 +432,7 @@ impl ApplicationHandler for VideoPlayerApp {
         match event {
             WindowEvent::CloseRequested => {
                 println!("\n👋 Closing Poppy Video Player.");
+                self.stop_audio();
                 event_loop.exit();
             }
 
@@ -308,9 +465,11 @@ impl ApplicationHandler for VideoPlayerApp {
                     self.is_paused = !self.is_paused;
                     if self.is_paused {
                         self.paused_at_position = self.relative_position();
+                        self.pause_audio();
                         println!("⏸ Paused at {:.2}s", self.paused_at_position);
                     } else {
                         self.playback_start = Some(Instant::now());
+                        self.resume_audio();
                         println!("▶ Resumed playback");
                     }
                     if let Some(w) = &self.window {
@@ -331,12 +490,14 @@ impl ApplicationHandler for VideoPlayerApp {
                     self.paused_at_position = 0.0;
                     self.playback_start = Some(Instant::now());
                     let _ = self.advance_frame();
+                    self.start_audio(0.0);
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
                 }
                 KeyCode::Escape | KeyCode::KeyQ => {
                     println!("\n👋 Exiting.");
+                    self.stop_audio();
                     event_loop.exit();
                 }
                 _ => {}
@@ -356,8 +517,8 @@ impl ApplicationHandler for VideoPlayerApp {
                     let elapsed = start.elapsed().as_secs_f64();
                     let target_pos = self.paused_at_position + elapsed;
 
-                    // Fetch next frame if current relative PTS is behind target playback position
-                    if self.relative_position() <= target_pos {
+                    // Advance frame if playback clock is ahead
+                    while !self.is_paused && self.relative_position() < target_pos {
                         match self.advance_frame() {
                             Ok(true) => {}
                             Ok(false) => {
@@ -366,15 +527,18 @@ impl ApplicationHandler for VideoPlayerApp {
                                     "🏁 End of stream reached. [Press 'R' to Replay, 'Q' to Exit]"
                                 );
                                 self.is_paused = true;
+                                self.pause_audio();
+                                break;
                             }
                             Err(e) => {
                                 eprintln!("⚠️ Decode error during playback: {e}");
+                                break;
                             }
                         }
                     }
                 }
 
-                // Render current frame to surface texture
+                // Render current frame to surface texture with letterboxing / pillarboxing
                 if let (Some(surface), Some(renderer), Some(frame)) =
                     (&self.surface, &self.renderer, &self.current_frame)
                 {
@@ -384,7 +548,10 @@ impl ApplicationHandler for VideoPlayerApp {
                                 .texture
                                 .create_view(&wgpu::TextureViewDescriptor::default());
 
-                            if let Err(e) = renderer.render_frame_to_view(frame, &view) {
+                            let viewport = self.compute_viewport();
+                            if let Err(e) =
+                                renderer.render_frame_to_view_with_viewport(frame, &view, viewport)
+                            {
                                 eprintln!("⚠️ Render error: {e}");
                             }
 
@@ -400,6 +567,7 @@ impl ApplicationHandler for VideoPlayerApp {
                         }
                         Err(wgpu::SurfaceError::OutOfMemory) => {
                             eprintln!("❌ Out of GPU memory!");
+                            self.stop_audio();
                             event_loop.exit();
                             return;
                         }
@@ -412,18 +580,30 @@ impl ApplicationHandler for VideoPlayerApp {
                     self.last_status_print = Instant::now();
                 }
 
-                // Schedule next frame redraw
-                if !self.is_paused {
-                    if let Some(w) = &self.window {
-                        w.request_redraw();
-                    }
-                    event_loop.set_control_flow(ControlFlow::Poll);
-                } else {
-                    event_loop.set_control_flow(ControlFlow::Wait);
-                }
+                // Schedule next frame wake-up
+                self.schedule_next_wake(event_loop);
             }
 
             _ => {}
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if !self.is_paused
+            && let Some(start) = self.playback_start
+        {
+            let elapsed = start.elapsed().as_secs_f64();
+            let target_pos = self.paused_at_position + elapsed;
+            if self.relative_position() <= target_pos {
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+                event_loop.set_control_flow(ControlFlow::Poll);
+            } else {
+                let wait_secs = self.relative_position() - target_pos;
+                let wake_at = Instant::now() + Duration::from_secs_f64(wait_secs.max(0.001));
+                event_loop.set_control_flow(ControlFlow::WaitUntil(wake_at));
+            }
         }
     }
 }

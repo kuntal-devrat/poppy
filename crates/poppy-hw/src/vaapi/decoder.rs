@@ -81,13 +81,14 @@ impl VaapiH264Decoder {
             None => true,
         };
         if need_alloc {
+            let pool_size = (sps.max_num_ref_frames as usize + 8).clamp(24, 32);
             let pool = SurfacePool::new(
                 self.device.va.clone(),
                 self.device.display,
                 self.device.config_id,
                 coded_w,
                 coded_h,
-                16,
+                pool_size,
             )?;
             self.pool = Some(pool);
             self.cur_surface_idx = 0;
@@ -136,29 +137,8 @@ impl VaapiH264Decoder {
 impl HwDecoder for VaapiH264Decoder {
     fn submit_packet(&mut self, packet: &Packet) -> Result<(), HwError> {
         // Handle both Annex-B (start codes) and AVCC length-prefixed NALs
-        let is_avcc = if packet.data.starts_with(&[0, 0, 0, 1]) {
-            false
-        } else if packet.data.len() >= 4 {
-            let len = u32::from_be_bytes([
-                packet.data[0],
-                packet.data[1],
-                packet.data[2],
-                packet.data[3],
-            ]) as usize;
-            if packet.data.starts_with(&[0, 0, 1]) {
-                // If starts with 00 00 01, distinguish 3-byte Annex-B from AVCC (len 256..511)
-                len > 0
-                    && len + 4 <= packet.data.len()
-                    && packet.data.len() > 4
-                    && (packet.data[4] & 0x80 == 0)
-            } else {
-                len > 0 && len + 4 <= packet.data.len()
-            }
-        } else {
-            false
-        };
-
-        let nals = if !is_avcc {
+        let nals = if packet.data.starts_with(&[0, 0, 0, 1]) || packet.data.starts_with(&[0, 0, 1])
+        {
             find_annex_b_nals(&packet.data)
         } else {
             // Parse AVCC length-prefixed
@@ -204,13 +184,14 @@ impl HwDecoder for VaapiH264Decoder {
                         };
 
                         if need_alloc {
+                            let pool_size = (sps.max_num_ref_frames as usize + 8).clamp(24, 32);
                             let pool = SurfacePool::new(
                                 self.device.va.clone(),
                                 self.device.display,
                                 self.device.config_id,
                                 coded_w,
                                 coded_h,
-                                16,
+                                pool_size,
                             )?;
                             self.pool = Some(pool);
                             self.cur_surface_idx = 0;
@@ -309,7 +290,6 @@ impl HwDecoder for VaapiH264Decoder {
             };
 
             let (_first_nal, first_header, first_slice) = &slices[0];
-            let target_surface = pool.surfaces[self.cur_surface_idx];
             let cur_poc = match sps.pic_order_cnt_type {
                 0 => first_slice.pic_order_cnt_lsb.unwrap_or(0) as i32,
                 2 => (first_slice.frame_num as i32) * 2,
@@ -341,6 +321,15 @@ impl HwDecoder for VaapiH264Decoder {
                     });
                 }
             }
+
+            // Select a free surface that is not currently held as a reference in the DPB
+            let target_surface = pool
+                .surfaces
+                .iter()
+                .copied()
+                .find(|&surf| !self.dpb.frames.iter().any(|f| f.surface_id == surf))
+                .unwrap_or(pool.surfaces[self.cur_surface_idx]);
+            self.cur_surface_idx = (self.cur_surface_idx + 1) % pool.surfaces.len();
 
             // Detect interlaced stream format (MBAFF / PAFF detection & progressive fallback)
             let interlace_mode = if sps.frame_mbs_only_flag {
@@ -374,6 +363,7 @@ impl HwDecoder for VaapiH264Decoder {
                 flags: pic_flags,
                 top_field_order_cnt: cur_poc,
                 bottom_field_order_cnt: cur_poc,
+                va_reserved: [0; 4],
             };
 
             // Resilient reference frame handling & concealment
@@ -389,10 +379,18 @@ impl HwDecoder for VaapiH264Decoder {
             pic_param.bit_depth_chroma_minus8 = sps.bit_depth_chroma_minus8;
             pic_param.num_ref_frames = sps.max_num_ref_frames as u8;
             pic_param.frame_num = first_slice.frame_num as u16;
+            pic_param.num_slice_groups_minus1 = pps.num_slice_groups_minus1 as u8;
+            pic_param.pic_init_qp_minus26 = pps.pic_init_qp_minus26 as i8;
+            pic_param.pic_init_qs_minus26 = pps.pic_init_qs_minus26 as i8;
+            pic_param.chroma_qp_index_offset = pps.chroma_qp_index_offset as i8;
+            pic_param.second_chroma_qp_index_offset = pps.second_chroma_qp_index_offset as i8;
 
             // Set seq_fields & pic_fields
             let mut seq_fields: u32 = 0;
             seq_fields |= (sps.chroma_format_idc as u32) & 3;
+            if sps.separate_colour_plane_flag {
+                seq_fields |= 1 << 2;
+            }
             if sps.gaps_in_frame_num_value_allowed_flag {
                 seq_fields |= 1 << 3;
             }
@@ -404,6 +402,9 @@ impl HwDecoder for VaapiH264Decoder {
             }
             if sps.direct_8x8_inference_flag {
                 seq_fields |= 1 << 6;
+            }
+            if sps.level_idc >= 31 {
+                seq_fields |= 1 << 7;
             }
             seq_fields |= (sps.log2_max_frame_num_minus4 & 0xF) << 8;
             seq_fields |= (sps.pic_order_cnt_type & 3) << 12;
@@ -427,14 +428,20 @@ impl HwDecoder for VaapiH264Decoder {
             if first_slice.field_pic_flag {
                 pic_fields |= 1 << 5;
             }
-            if first_slice.bottom_field_flag {
+            if pps.constrained_intra_pred_flag {
                 pic_fields |= 1 << 6;
             }
             if pps.bottom_field_pic_order_in_frame_present_flag {
                 pic_fields |= 1 << 7;
             }
-            if first_header.nal_ref_idc > 0 {
+            if pps.deblocking_filter_control_present_flag {
+                pic_fields |= 1 << 8;
+            }
+            if pps.redundant_pic_cnt_present_flag {
                 pic_fields |= 1 << 9;
+            }
+            if first_header.nal_ref_idc > 0 {
+                pic_fields |= 1 << 10;
             }
             pic_param.pic_fields = pic_fields;
 
@@ -593,8 +600,6 @@ impl HwDecoder for VaapiH264Decoder {
                     is_concealed: rf.is_concealed,
                 });
             }
-
-            self.cur_surface_idx = (self.cur_surface_idx + 1) % pool.surfaces.len();
         }
 
         Ok(())

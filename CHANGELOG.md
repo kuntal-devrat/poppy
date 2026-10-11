@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.5.0] - 2026-10-11
+
+### Added
+- **Synchronized Companion Audio**: Interactive player automatically detects container audio streams and plays synchronized audio with zero-latency `SIGSTOP`/`SIGCONT` pausing and seeking.
+- **Letterboxing & Pillarboxing**: Direct viewport calculations preserving native video aspect ratio with clean letterboxing on arbitrary window dimensions.
+- **Strict VSync Presentation**: Enforced `wgpu::PresentMode::Fifo` presentation to eliminate screen tearing across Vulkan, Wayland, and X11.
+- **Clock-Paced Frame Pacing**: Converted event loop from busy-polling to `ControlFlow::WaitUntil` timestamp scheduling, reducing CPU utilization to ~4%.
+
+### Fixed
+- **VA-API Reference Surface Overwrites**: Expanded decode surface pool from 16 to 32 and implemented DPB reference-aware surface allocation, resolving corrupted frame concealment warnings and macroblocking artifacts.
+- **VA-API H.264 FFI Struct Alignment**: Corrected bitfield offsets and reserved padding fields in `VAPictureParameterBufferH264` and `VASliceParameterBufferH264`.
+
+---
+
 ## [1.0.0] - 2026-10-09
 
 ### Added

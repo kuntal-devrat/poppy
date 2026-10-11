@@ -66,7 +66,7 @@ typedef struct {
 /* ========================================================================= */
 
 /**
- * @brief Returns the Poppy library semver version string ("1.0.0").
+ * @brief Returns the Poppy library semver version string ("0.5.0").
  */
 const char* poppy_version(void);
 

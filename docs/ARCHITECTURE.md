@@ -1,7 +1,7 @@
 # Project Poppy: Architectural Guide & Technical Specification
 
-> **Version:** 1.0.0 (Production Release)  
-> **Status:** Stable API Freeze  
+> **Version:** 0.5.0 (Beta Release)  
+> **Status:** Active Development & Stabilization  
 > **Repository:** [https://github.com/kuntal-devrat/poppy](https://github.com/kuntal-devrat/poppy)
 
 ---
@@ -219,7 +219,7 @@ Poppy exports a stable, thread-safe, and panic-safe C ABI defined in `include/po
 
 | Function | Description |
 |---|---|
-| `poppy_version()` | Returns `"1.0.0"` semver string. |
+| `poppy_version()` | Returns `"0.5.0"` semver string. |
 | `poppy_open(path, &stream)` | Opens container and prepares hardware decoder. |
 | `poppy_close(stream)` | Deallocates open media stream and releases GPU contexts. |
 | `poppy_get_stream_count(stream, &count)` | Returns number of media tracks in container. |

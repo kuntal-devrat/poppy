@@ -60,6 +60,7 @@ pub struct VAPictureH264 {
     pub flags: c_uint,
     pub top_field_order_cnt: c_int,
     pub bottom_field_order_cnt: c_int,
+    pub va_reserved: [u32; 4],
 }
 
 impl Default for VAPictureH264 {
@@ -70,6 +71,7 @@ impl Default for VAPictureH264 {
             flags: VA_PICTURE_H264_INVALID,
             top_field_order_cnt: 0,
             bottom_field_order_cnt: 0,
+            va_reserved: [0; 4],
         }
     }
 }
@@ -94,6 +96,13 @@ pub struct VAPictureParameterBufferH264 {
     pub second_chroma_qp_index_offset: i8,
     pub pic_fields: u32,
     pub frame_num: u16,
+    pub va_reserved: [u32; 8],
+}
+
+impl Default for VAPictureParameterBufferH264 {
+    fn default() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
 }
 
 #[repr(C)]
@@ -101,6 +110,7 @@ pub struct VAPictureParameterBufferH264 {
 pub struct VAIQMatrixBufferH264 {
     pub scaling_list4x4: [[u8; 16]; 6],
     pub scaling_list8x8: [[u8; 64]; 2],
+    pub va_reserved: [u32; 4],
 }
 
 impl Default for VAIQMatrixBufferH264 {
@@ -109,6 +119,7 @@ impl Default for VAIQMatrixBufferH264 {
         Self {
             scaling_list4x4: [[16; 16]; 6],
             scaling_list8x8: [[16; 64]; 2],
+            va_reserved: [0; 4],
         }
     }
 }
@@ -146,6 +157,7 @@ pub struct VASliceParameterBufferH264 {
     pub chroma_weight_l1_flag: u8,
     pub chroma_weight_l1: [[i16; 2]; 32],
     pub chroma_offset_l1: [[i16; 2]; 32],
+    pub va_reserved: [u32; 4],
 }
 
 pub const VA_PICTURE_HEVC_INVALID: c_uint = 0x00000001;
@@ -417,6 +429,81 @@ impl Default for VASliceParameterBufferAV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_h264_struct_sizes() {
+        use std::mem::offset_of;
+        assert_eq!(std::mem::size_of::<VAPictureH264>(), 36);
+        assert_eq!(std::mem::size_of::<VAPictureParameterBufferH264>(), 672);
+        assert_eq!(std::mem::size_of::<VAIQMatrixBufferH264>(), 240);
+        assert_eq!(std::mem::size_of::<VASliceParameterBufferH264>(), 3128);
+
+        assert_eq!(offset_of!(VAPictureParameterBufferH264, curr_pic), 0);
+        assert_eq!(
+            offset_of!(VAPictureParameterBufferH264, reference_frames),
+            36
+        );
+        assert_eq!(
+            offset_of!(VAPictureParameterBufferH264, picture_width_in_mbs_minus1),
+            612
+        );
+        assert_eq!(
+            offset_of!(VAPictureParameterBufferH264, picture_height_in_mbs_minus1),
+            614
+        );
+        assert_eq!(
+            offset_of!(VAPictureParameterBufferH264, bit_depth_luma_minus8),
+            616
+        );
+        assert_eq!(
+            offset_of!(VAPictureParameterBufferH264, bit_depth_chroma_minus8),
+            617
+        );
+        assert_eq!(
+            offset_of!(VAPictureParameterBufferH264, num_ref_frames),
+            618
+        );
+        assert_eq!(offset_of!(VAPictureParameterBufferH264, seq_fields), 620);
+        assert_eq!(
+            offset_of!(VAPictureParameterBufferH264, num_slice_groups_minus1),
+            624
+        );
+        assert_eq!(
+            offset_of!(VAPictureParameterBufferH264, slice_group_map_type),
+            625
+        );
+        assert_eq!(
+            offset_of!(VAPictureParameterBufferH264, slice_group_change_rate_minus1),
+            626
+        );
+        assert_eq!(
+            offset_of!(VAPictureParameterBufferH264, pic_init_qp_minus26),
+            628
+        );
+        assert_eq!(
+            offset_of!(VAPictureParameterBufferH264, pic_init_qs_minus26),
+            629
+        );
+        assert_eq!(
+            offset_of!(VAPictureParameterBufferH264, chroma_qp_index_offset),
+            630
+        );
+        assert_eq!(
+            offset_of!(VAPictureParameterBufferH264, second_chroma_qp_index_offset),
+            631
+        );
+        assert_eq!(offset_of!(VAPictureParameterBufferH264, pic_fields), 632);
+        assert_eq!(offset_of!(VAPictureParameterBufferH264, frame_num), 636);
+        assert_eq!(offset_of!(VAPictureParameterBufferH264, va_reserved), 640);
+
+        assert_eq!(offset_of!(VASliceParameterBufferH264, ref_pic_list0), 28);
+        assert_eq!(offset_of!(VASliceParameterBufferH264, ref_pic_list1), 1180);
+        assert_eq!(
+            offset_of!(VASliceParameterBufferH264, luma_log2_weight_denom),
+            2332
+        );
+        assert_eq!(offset_of!(VASliceParameterBufferH264, va_reserved), 3112);
+    }
 
     #[test]
     fn test_hevc_struct_sizes() {
