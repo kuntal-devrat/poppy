@@ -7,6 +7,7 @@ members = [
     "crates/poppy-hevc",
     "crates/poppy-av1",
     "crates/poppy-vp9",
+    "crates/poppy-audio",
     "crates/poppy-hw",
     "crates/poppy-render",
     "crates/poppy",
@@ -14,7 +15,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.5.5"
+version = "0.6.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/kuntal-devrat/poppy"
@@ -28,6 +29,7 @@ poppy-h264 = { path = "crates/poppy-h264" }
 poppy-hevc = { path = "crates/poppy-hevc" }
 poppy-av1 = { path = "crates/poppy-av1" }
 poppy-vp9 = { path = "crates/poppy-vp9" }
+poppy-audio = { path = "crates/poppy-audio" }
 poppy-hw = { path = "crates/poppy-hw" }
 poppy-render = { path = "crates/poppy-render" }
 poppy = { path = "crates/poppy" }
@@ -50,3 +52,6 @@ winit = "0.30"
 futures-core = "0.3"
 futures-util = { version = "0.3", default-features = false }
 proptest = "1.6"
+symphonia = { version = "0.5", default-features = false, features = ["aac", "mp3", "flac", "vorbis", "pcm"] }
+opus-decoder = "0.1"
+cpal = "0.15"

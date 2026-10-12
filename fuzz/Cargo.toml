@@ -16,6 +16,8 @@ poppy-demux = { path = "../crates/poppy-demux" }
 poppy-h264 = { path = "../crates/poppy-h264" }
 poppy-hevc = { path = "../crates/poppy-hevc" }
 poppy-av1 = { path = "../crates/poppy-av1" }
+poppy-vp9 = { path = "../crates/poppy-vp9" }
+poppy-audio = { path = "../crates/poppy-audio" }
 bytes = "1"
 
 [[bin]]
@@ -51,5 +53,23 @@ doc = false
 [[bin]]
 name = "fuzz_bsf"
 path = "fuzz_targets/fuzz_bsf.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_vp9_parse"
+path = "fuzz_targets/fuzz_vp9_parse.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_audio"
+path = "fuzz_targets/fuzz_audio.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_fragment"
+path = "fuzz_targets/fuzz_fragment.rs"
 test = false
 doc = false

@@ -18,6 +18,7 @@ poppy-hevc = { workspace = true }
 poppy-av1 = { workspace = true }
 poppy-vp9 = { workspace = true }
 poppy-hw = { workspace = true }
+poppy-audio = { workspace = true }
 poppy-render = { workspace = true }
 bytes = { workspace = true }
 thiserror = { workspace = true }
@@ -26,3 +27,6 @@ tracing = { workspace = true }
 futures-core = { workspace = true }
 futures-util = { workspace = true }
 libc = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

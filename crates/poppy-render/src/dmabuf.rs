@@ -87,11 +87,23 @@ impl DmaBufImage {
     }
 }
 
-impl From<&DmaBufDescriptor> for DmaBufImage {
-    fn from(desc: &DmaBufDescriptor) -> Self {
+impl TryFrom<&DmaBufDescriptor> for DmaBufImage {
+    type Error = RenderError;
+
+    fn try_from(desc: &DmaBufDescriptor) -> Result<Self, Self::Error> {
+        if desc.fd < 0 {
+            return Err(RenderError::ImportFailed("Invalid DMA-BUF fd in descriptor".into()));
+        }
         #[cfg(unix)]
         let owned_fd = {
             let dup_fd = unsafe { libc::dup(desc.fd) };
+            if dup_fd < 0 {
+                return Err(RenderError::ImportFailed(format!(
+                    "dup() failed for DMA-BUF fd {}: {}",
+                    desc.fd,
+                    std::io::Error::last_os_error()
+                )));
+            }
             unsafe { OwnedFd::from_raw_fd(dup_fd) }
         };
         #[cfg(not(unix))]
@@ -102,14 +114,14 @@ impl From<&DmaBufDescriptor> for DmaBufImage {
             let stride = desc.pitches.get(i).copied().unwrap_or(0);
             planes.push(DmaBufPlane { offset, stride });
         }
-        Self {
+        Ok(Self {
             fd: owned_fd,
             drm_format: desc.drm_format,
             drm_modifier: desc.drm_modifier,
             width: desc.width,
             height: desc.height,
             planes,
-        }
+        })
     }
 }
 
@@ -228,6 +240,30 @@ pub fn import_dmabuf_zero_copy(
                 .copied()
                 .unwrap_or(desc.width * desc.height);
             let uv_pitch = desc.pitches.get(1).copied().unwrap_or(desc.width);
+            // Honest multi-object check: single-fd import cannot represent
+            // separate Y/UV GEM handles. Offsets must lie within one allocation.
+            // If the container exported multiple fds (flattened to objects[0]),
+            // surface.rs already rejects; here validate offsets are monotonic.
+            if desc.offsets.len() > 2 {
+                return Err(RenderError::ImportFailed(
+                    "multi-plane DMA-BUF with >2 offsets not supported in single-memory import"
+                        .into(),
+                ));
+            }
+            // Tiling modifier: only LINEAR (0) and INVALID (all-ones, treat as linear)
+            // are safe with OPTIMAL tiling + explicit offsets. Other modifiers
+            // (Intel X/Y-tiled, AMD DCC) require VkImageDrmFormatModifierExplicitCreateInfo
+            // which wgpu-hal does not yet expose; fail honestly instead of misrendering.
+            const DRM_FORMAT_MOD_LINEAR: u64 = 0;
+            const DRM_FORMAT_MOD_INVALID: u64 = 0x00FF_FFFF_FFFF_FFFF;
+            if desc.drm_modifier != DRM_FORMAT_MOD_LINEAR
+                && desc.drm_modifier != DRM_FORMAT_MOD_INVALID
+            {
+                return Err(RenderError::ImportFailed(format!(
+                    "non-linear DRM modifier {:#x} requires explicit modifier import (unsupported)",
+                    desc.drm_modifier
+                )));
+            }
             let total_size = ((uv_offset + uv_pitch * desc.height.div_ceil(2)) as u64).max(65536);
 
             let mut import_info = ash::vk::ImportMemoryFdInfoKHR::default()

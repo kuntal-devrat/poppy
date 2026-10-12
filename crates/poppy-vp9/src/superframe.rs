@@ -78,6 +78,15 @@ pub fn parse_superframe_frames(packet: &[u8]) -> Result<Vec<&[u8]>, Vp9ParserErr
         pos += size;
     }
 
+    // Exact-fit check: trailing gap bytes indicate corrupt index.
+    if pos != packet.len().saturating_sub(index_size) {
+        return Err(Vp9ParserError::InvalidSuperframeSize {
+            frame_idx: num_frames,
+            frame_size: packet.len().saturating_sub(index_size).saturating_sub(pos),
+            packet_size: packet.len(),
+        });
+    }
+
     Ok(frames)
 }
 

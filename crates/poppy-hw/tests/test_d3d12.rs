@@ -7,12 +7,35 @@ use std::path::Path;
 
 #[test]
 fn test_d3d12_device_and_pool_initialization() {
-    let device = D3D12VideoDevice::open().expect("D3D12 video device initialization");
+    // Honest backend: D3D12 COM not implemented — open() must fail, not fabricate handles.
+    // Pool allocation (pure metadata) still works for unit testing.
+    #[cfg(not(target_os = "windows"))]
+    {
+        assert!(
+            D3D12VideoDevice::open().is_err(),
+            "D3D12 open must fail off-Windows"
+        );
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // Even on Windows the COM backend is not yet implemented.
+        assert!(
+            D3D12VideoDevice::open().is_err(),
+            "D3D12 COM backend not yet implemented"
+        );
+    }
+    // Pool shim test (no hardware needed).
+    let device = D3D12VideoDevice {
+        adapter_name: "test".into(),
+        is_hardware: false,
+        device_ptr: std::ptr::null_mut(),
+        video_device_ptr: std::ptr::null_mut(),
+    };
     assert!(device.supports_decode(CodecId::H264));
     assert!(device.supports_decode(CodecId::Hevc));
     assert!(device.supports_decode(CodecId::Av1));
 
-    let pool = D3D12SurfacePool::new(1920, 1080, 8, false).expect("D3D12 surface pool allocation");
+    let pool = D3D12SurfacePool::new(&device, 1920, 1080, 8, false).expect("D3D12 surface pool allocation");
     assert_eq!(pool.surfaces.len(), 8);
     assert_eq!(pool.surfaces[0].width, 1920);
     assert_eq!(pool.surfaces[0].height, 1080);
@@ -48,7 +71,9 @@ fn test_d3d12_multislice_batching_and_decode_on_real_video() {
         return;
     }
 
+    #[allow(unused_mut)]
     let mut demuxer = Mp4Demuxer::open(path).expect("failed to open multislice test video");
+    #[allow(unused_variables)]
     let (video_track_idx, video_config) = {
         let stream = demuxer
             .streams()
@@ -58,6 +83,23 @@ fn test_d3d12_multislice_batching_and_decode_on_real_video() {
         (stream.index, stream.config.clone())
     };
 
+    #[cfg(not(target_os = "windows"))]
+    {
+        assert!(
+            D3D12VideoDecoder::new(CodecId::H264).is_err(),
+            "D3D12 decoder must fail off-Windows"
+        );
+        return;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        assert!(
+            D3D12VideoDecoder::new(CodecId::H264).is_err(),
+            "D3D12 COM backend not yet implemented"
+        );
+        return;
+    }
+    #[allow(unreachable_code)]
     let mut decoder = D3D12VideoDecoder::new(CodecId::H264).expect("create D3D12 decoder");
 
     // Ingest parameter sets
@@ -152,6 +194,23 @@ fn test_d3d12_multislice_batching_and_decode_on_real_video() {
 
 #[test]
 fn test_d3d12_error_resilience_and_corrupt_stream_handling() {
+    #[cfg(not(target_os = "windows"))]
+    {
+        assert!(
+            D3D12VideoDecoder::new(CodecId::H264).is_err(),
+            "D3D12 decoder must fail off-Windows"
+        );
+        return;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        assert!(
+            D3D12VideoDecoder::new(CodecId::H264).is_err(),
+            "D3D12 COM backend not yet implemented"
+        );
+        return;
+    }
+    #[allow(unreachable_code)]
     let mut decoder = D3D12VideoDecoder::new(CodecId::H264).expect("create D3D12 decoder");
 
     // Submit malformed packets

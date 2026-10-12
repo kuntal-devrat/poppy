@@ -12,6 +12,9 @@ pub enum PoppyError {
     #[error("hardware decoder error: {0}")]
     Hardware(#[from] poppy_hw::HwError),
 
+    #[error("audio error: {0}")]
+    Audio(#[from] poppy_audio::AudioError),
+
     #[error("unsupported container format for '{0}'")]
     UnsupportedFormat(String),
 
@@ -23,4 +26,7 @@ pub enum PoppyError {
 
     #[error("seek failed: {0}")]
     SeekFailed(String),
+
+    #[error("invalid seek target: {0}")]
+    InvalidSeek(String),
 }

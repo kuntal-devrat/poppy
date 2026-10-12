@@ -45,9 +45,19 @@ impl Pps {
 
         let pic_parameter_set_id = r.read_ue()?;
         let seq_parameter_set_id = r.read_ue()?;
+        if pic_parameter_set_id > 255 || seq_parameter_set_id > 31 {
+            return Err(BitstreamError::InvalidSyntax(format!(
+                "PPS ids out of range: pps {pic_parameter_set_id} (>255) sps {seq_parameter_set_id} (>31)"
+            )));
+        }
         let entropy_coding_mode_flag = r.read_bit()?;
         let bottom_field_pic_order_in_frame_present_flag = r.read_bit()?;
         let num_slice_groups_minus1 = r.read_ue()?;
+        if num_slice_groups_minus1 > 7 {
+            return Err(BitstreamError::InvalidSyntax(format!(
+                "num_slice_groups_minus1 {num_slice_groups_minus1} exceeds 7"
+            )));
+        }
 
         if num_slice_groups_minus1 > 0 {
             let slice_group_map_type = r.read_ue()?;
@@ -82,9 +92,24 @@ impl Pps {
 
         let num_ref_idx_l0_default_active_minus1 = r.read_ue()?;
         let num_ref_idx_l1_default_active_minus1 = r.read_ue()?;
+        if num_ref_idx_l0_default_active_minus1 > 31 || num_ref_idx_l1_default_active_minus1 > 31 {
+            return Err(BitstreamError::InvalidSyntax(
+                "num_ref_idx_default_active_minus1 exceeds 31".into(),
+            ));
+        }
         let weighted_pred_flag = r.read_bit()?;
         let weighted_bipred_idc = r.read_bits(2)? as u8;
+        if weighted_bipred_idc > 2 {
+            return Err(BitstreamError::InvalidSyntax(format!(
+                "weighted_bipred_idc {weighted_bipred_idc} exceeds 2"
+            )));
+        }
         let pic_init_qp_minus26 = r.read_se()?;
+        if !(-26..=25).contains(&pic_init_qp_minus26) {
+            return Err(BitstreamError::InvalidSyntax(format!(
+                "pic_init_qp_minus26 {pic_init_qp_minus26} out of -26..25"
+            )));
+        }
         let pic_init_qs_minus26 = r.read_se()?;
         let chroma_qp_index_offset = r.read_se()?;
         let deblocking_filter_control_present_flag = r.read_bit()?;

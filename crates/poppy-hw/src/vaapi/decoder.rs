@@ -644,14 +644,14 @@ impl HwDecoder for VaapiH264Decoder {
                 // Sync surface: hardware ASIC executes decode
                 let mut sync_status = (va.vaSyncSurface)(d, target_surface);
                 let mut retries = 0;
-                while sync_status == 34 && retries < 1000 {
+                while sync_status == crate::vaapi::ffi::VA_STATUS_ERROR_HW_BUSY && retries < 1000 {
                     std::thread::sleep(std::time::Duration::from_millis(1));
                     sync_status = (va.vaSyncSurface)(d, target_surface);
                     retries += 1;
                 }
                 if sync_status != VA_STATUS_SUCCESS {
                     let err_msg = va.err_str(sync_status);
-                    if err_msg.contains("decoding error") || err_msg.contains("error") {
+                    if sync_status == crate::vaapi::ffi::VA_STATUS_ERROR_DECODING_ERROR {
                         is_concealed = true;
                         eprintln!("VA-API warning: {} (concealed corrupted frame)", err_msg);
                     } else {
@@ -713,10 +713,13 @@ impl HwDecoder for VaapiH264Decoder {
                 .pool
                 .as_ref()
                 .and_then(|p| p.export_dmabuf_descriptor(rf.surface_id).ok());
-            let data = self
-                .pool
-                .as_ref()
-                .and_then(|p| p.read_surface_data(rf.surface_id, rf.width, rf.height).ok());
+            let data = if dmabuf.is_none() {
+                self.pool
+                    .as_ref()
+                    .and_then(|p| p.read_surface_data(rf.surface_id, rf.width, rf.height).ok())
+            } else {
+                None
+            }; // lazy zero-copy
             self.output_queue.push_back(DecodedFrame {
                 pts: rf.pts,
                 width: rf.width,

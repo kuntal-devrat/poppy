@@ -115,10 +115,13 @@ impl VaapiVp9Decoder {
                     .pool
                     .as_ref()
                     .and_then(|p| p.export_dmabuf_descriptor(surf).ok());
-                let data = self
-                    .pool
-                    .as_ref()
-                    .and_then(|p| p.read_surface_data(surf, w, h).ok());
+                let data = if dmabuf.is_none() {
+                    self.pool
+                        .as_ref()
+                        .and_then(|p| p.read_surface_data(surf, w, h).ok())
+                } else {
+                    None
+                }; // lazy zero-copy
 
                 self.output_queue.push_back(DecodedFrame {
                     pts,
@@ -352,14 +355,14 @@ impl VaapiVp9Decoder {
 
             let mut sync_status = (va.vaSyncSurface)(dpy, target_surface);
             let mut retries = 0;
-            while sync_status == 34 && retries < 1000 {
+            while sync_status == crate::vaapi::ffi::VA_STATUS_ERROR_HW_BUSY && retries < 1000 {
                 std::thread::sleep(std::time::Duration::from_millis(1));
                 sync_status = (va.vaSyncSurface)(dpy, target_surface);
                 retries += 1;
             }
             if sync_status != VA_STATUS_SUCCESS {
                 let err_msg = va.err_str(sync_status);
-                if err_msg.contains("decoding error") {
+                if sync_status == crate::vaapi::ffi::VA_STATUS_ERROR_DECODING_ERROR {
                     is_concealed = true;
                     eprintln!("VA-API VP9 warning: {} (concealment active)", err_msg);
                 } else {
@@ -384,10 +387,14 @@ impl VaapiVp9Decoder {
                 .pool
                 .as_ref()
                 .and_then(|p| p.export_dmabuf_descriptor(target_surface).ok());
-            let data = self.pool.as_ref().and_then(|p| {
-                p.read_surface_data(target_surface, header.width, header.height)
-                    .ok()
-            });
+            let data = if dmabuf.is_none() {
+                self.pool.as_ref().and_then(|p| {
+                    p.read_surface_data(target_surface, header.width, header.height)
+                        .ok()
+                })
+            } else {
+                None
+            }; // lazy zero-copy
 
             self.output_queue.push_back(DecodedFrame {
                 pts,

@@ -12,7 +12,7 @@ mod player;
 #[derive(Parser, Debug)]
 #[command(
     name = "poppy",
-    version = "0.5.5",
+    version = "0.6.0",
     about = "🌸 Poppy — Modern media pipeline inspector, zero-copy GPU decoder, and wgpu player"
 )]
 struct Cli {
@@ -52,6 +52,15 @@ enum Commands {
         /// Enable wgpu zero-copy color conversion rendering pipeline
         #[arg(short, long)]
         render: bool,
+    },
+    /// Benchmark demux + parse throughput (no HW required; substantiates README FPS methodology)
+    Bench {
+        /// Path to the media file
+        file: PathBuf,
+
+        /// Number of iterations over the packet stream
+        #[arg(short, long, default_value_t = 3)]
+        iterations: usize,
     },
     /// Play video in an interactive desktop window with real-time hardware acceleration
     Play {
@@ -429,12 +438,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } => {
             let backend_name = if cfg!(target_os = "linux") {
                 "Linux VA-API (DRM PRIME Zero-Copy)"
-            } else if cfg!(target_os = "windows") {
-                "Windows Direct3D 12 Video (DXGI Shared Handle)"
-            } else if cfg!(target_os = "macos") {
-                "macOS VideoToolbox (CVPixelBuffer Zero-Copy)"
             } else {
-                "Generic Software Decode"
+                "No native HW backend on this OS (D3D12/VideoToolbox not yet implemented; demux-only)"
             };
             println!(
                 "🚀 Initializing hardware decoding pipeline [{}] for: {}",
@@ -492,9 +497,77 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 0.0
             };
 
+            if !stream.has_hardware_decoder() {
+                eprintln!(
+                    "Note: no hardware decoder active (headless or unsupported platform) — decoded {frame_count} frames via demux-only path (Ok(None) at EOS)."
+                );
+            }
+            let accel = if stream.has_hardware_decoder() {
+                "via GPU hardware accelerator"
+            } else {
+                "via demux-only fallback (no HW decoder)"
+            };
             println!(
-                "\n✨ Decoded {} frames in {:.2?} ({:.1} FPS) via GPU hardware accelerator",
-                frame_count, elapsed, fps
+                "\nDecoded {frame_count} frames in {elapsed:.2?} ({fps:.1} FPS) {accel}",
+                frame_count = frame_count,
+                elapsed = elapsed,
+                fps = fps,
+                accel = accel
+            );
+        }
+
+        Commands::Bench { file, iterations } => {
+            use std::time::Instant;
+            println!("Benchmarking demux + parse: {}", file.display());
+            let mut total_packets = 0usize;
+            let mut total_bytes = 0u64;
+            let mut total_nals = 0usize;
+            let start = Instant::now();
+            let ext = file
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            let is_mkv = ext == "mkv" || ext == "webm";
+            for _ in 0..iterations.max(1) {
+                if is_mkv {
+                    let mut m = poppy_demux::MatroskaDemuxer::open(&file)?;
+                    while let Some(pkt) = m.read_packet()? {
+                        total_packets += 1;
+                        total_bytes += pkt.data.len() as u64;
+                        total_nals += 1;
+                    }
+                } else {
+                    let mut d = Mp4Demuxer::open(&file)?;
+                    while let Some(pkt) = d.read_packet()? {
+                        total_packets += 1;
+                        total_bytes += pkt.data.len() as u64;
+                        // Count length-prefixed NALs for H.264/HEVC without HW.
+                        if pkt.data.len() >= 4 {
+                            let mut cur = 0;
+                            while cur + 4 <= pkt.data.len() {
+                                let len = u32::from_be_bytes([
+                                    pkt.data[cur],
+                                    pkt.data[cur + 1],
+                                    pkt.data[cur + 2],
+                                    pkt.data[cur + 3],
+                                ]) as usize;
+                                if len == 0 || cur + 4 + len > pkt.data.len() {
+                                    break;
+                                }
+                                total_nals += 1;
+                                cur += 4 + len;
+                            }
+                        }
+                    }
+                }
+            }
+            let elapsed = start.elapsed();
+            let fps =
+                total_packets as f64 / elapsed.as_secs_f64().max(1e-9) / iterations.max(1) as f64;
+            let mbps = total_bytes as f64 / 1_000_000.0 / elapsed.as_secs_f64().max(1e-9);
+            println!(
+                "packets={total_packets} nals={total_nals} bytes={total_bytes} time={elapsed:.2?} avg_fps={fps:.1} throughput={mbps:.1} MB/s (demux+parse only, no HW)"
             );
         }
 

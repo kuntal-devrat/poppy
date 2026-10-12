@@ -83,6 +83,12 @@ impl<'a> Vp9BitReader<'a> {
         if n == 0 {
             return Ok(0);
         }
+        if n > 32 {
+            return Err(Vp9ParserError::UnexpectedEof {
+                needed_bits: n,
+                available_bits: self.bits_remaining(),
+            });
+        }
         if self.bits_remaining() < n {
             return Err(Vp9ParserError::UnexpectedEof {
                 needed_bits: n,

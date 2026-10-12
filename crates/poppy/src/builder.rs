@@ -12,6 +12,7 @@ use poppy_render::ColorSpace;
 pub struct MediaStreamBuilder {
     pub(crate) stream_index: Option<usize>,
     pub(crate) hardware_acceleration: bool,
+    pub(crate) software_fallback: bool,
     pub(crate) buffer_capacity: usize,
     pub(crate) color_space: Option<ColorSpace>,
 }
@@ -21,6 +22,7 @@ impl Default for MediaStreamBuilder {
         Self {
             stream_index: None,
             hardware_acceleration: true,
+            software_fallback: true,
             buffer_capacity: 16,
             color_space: None,
         }
@@ -44,9 +46,16 @@ impl MediaStreamBuilder {
 
     /// Enable or disable hardware decoder acceleration.
     ///
-    /// When disabled, compressed packets are passed through without GPU decoding.
+    /// When disabled, compressed packets are passed through without GPU decoding
+    /// unless software fallback is enabled.
     pub fn hardware_acceleration(mut self, enabled: bool) -> Self {
         self.hardware_acceleration = enabled;
+        self
+    }
+
+    /// Enable or disable software decoder fallback when hardware acceleration is unavailable.
+    pub fn software_fallback(mut self, enabled: bool) -> Self {
+        self.software_fallback = enabled;
         self
     }
 

@@ -1,6 +1,21 @@
 //! # poppy-render
 //!
 //! High-performance GPU rendering and zero-copy interop bridges powered by `wgpu`.
+//!
+//! ## Example
+//!
+//! ```
+//! use poppy_render::ColorSpace;
+//!
+//! let cs = ColorSpace::Bt709Limited;
+//! assert_eq!(cs.matrix_index(), 0);
+//! assert!(!cs.is_full_range());
+//!
+//! let cs_full = ColorSpace::Bt709Full;
+//! assert!(cs_full.is_full_range());
+//! ```
+
+#![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod dmabuf;
 pub mod dxgi;

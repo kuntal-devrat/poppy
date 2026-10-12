@@ -28,4 +28,5 @@ wgpu-hal = { workspace = true, features = ["dx12"] }
 wgpu-hal = { workspace = true, features = ["metal"] }
 
 [dev-dependencies]
+proptest = { workspace = true }
 poppy-demux = { workspace = true }

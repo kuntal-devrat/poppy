@@ -34,6 +34,9 @@ async fn test_media_stream_builder_options() {
     assert_eq!(stream.target_stream_index(), 0);
     assert!(stream.duration_seconds().unwrap_or(0.0) > 0.0);
     assert!(!stream.streams().is_empty());
+    if let Some(fps_dur) = stream.estimated_frame_duration_seconds() {
+        assert!(fps_dur > 0.0 && fps_dur < 1.0, "estimated frame duration {fps_dur} should be reasonable");
+    }
 }
 
 #[tokio::test]

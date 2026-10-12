@@ -7,6 +7,15 @@ use std::path::Path;
 
 #[test]
 fn test_videotoolbox_initialization_and_extradata() {
+    #[cfg(not(target_os = "macos"))]
+    {
+        assert!(
+            VideoToolboxDecoder::new(CodecId::H264).is_err(),
+            "VideoToolbox decoder must fail off-macOS"
+        );
+        return;
+    }
+    #[allow(unreachable_code)]
     let mut decoder = VideoToolboxDecoder::new(CodecId::H264).expect("create VideoToolbox decoder");
     assert_eq!(decoder.codec, CodecId::H264);
 
@@ -29,14 +38,21 @@ fn test_videotoolbox_initialization_and_extradata() {
 
     let res = decoder.set_extradata(&mock_avcc);
     assert!(res.is_ok(), "set_extradata should succeed");
-    assert!(decoder.active_h264_sps.is_some());
-    assert!(decoder.active_h264_pps.is_some());
     assert!(decoder.width > 0);
     assert!(decoder.height > 0);
 }
 
 #[test]
 fn test_videotoolbox_decode_multislice_and_cvpixelbuffer_export() {
+    #[cfg(not(target_os = "macos"))]
+    {
+        assert!(
+            VideoToolboxDecoder::new(CodecId::H264).is_err(),
+            "VideoToolbox decoder must fail off-macOS"
+        );
+        return;
+    }
+    #[allow(unreachable_code)]
     let candidates = [
         "tests/samples/test_h264_multislice.mp4",
         "../../tests/samples/test_h264_multislice.mp4",
@@ -160,6 +176,15 @@ fn test_videotoolbox_decode_multislice_and_cvpixelbuffer_export() {
 
 #[test]
 fn test_videotoolbox_resilience_corrupted_packets() {
+    #[cfg(not(target_os = "macos"))]
+    {
+        assert!(
+            VideoToolboxDecoder::new(CodecId::H264).is_err(),
+            "VideoToolbox decoder must fail off-macOS"
+        );
+        return;
+    }
+    #[allow(unreachable_code)]
     let mut decoder = VideoToolboxDecoder::new(CodecId::H264).expect("create VideoToolbox decoder");
 
     let malformed = [

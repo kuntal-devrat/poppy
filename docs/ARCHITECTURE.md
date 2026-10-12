@@ -1,6 +1,6 @@
 # Project Poppy: Architectural Guide & Technical Specification
 
-> **Version:** 0.5.5 (Beta Release)  
+> **Version:** 0.6.0 (Production Release)  
 > **Status:** Active Development & Stabilization  
 > **Repository:** [https://github.com/kuntal-devrat/poppy](https://github.com/kuntal-devrat/poppy)
 
@@ -102,6 +102,13 @@ Bitstream parsing is split into dedicated zero-allocation crates operating direc
 ### `poppy-av1`
 - **OBU Demarcation**: Parses Open Bitstream Unit headers with LEB128 variable-length integer parsing.
 - **Sequence Header & Frame Header**: Extracts color configuration (8-bit vs 10-bit, sub-sampling, color primaries), loop filter parameters, CDEF, and reference frame assignment.
+- **Tiles**: Uniform and non-uniform spacing up to 64x64, `large_scale_tile` support, 64-entry `width/height_in_sbs_minus_1`.
+
+### `poppy-vp9`
+- **Uncompressed header**: frame marker/sync, profile/bit-depth/colour, inter dimensions via `ref_dims` (error when missing), segmentation `alt_q` as i16 (-255..255), superframe exact-fit validation.
+
+### `poppy-audio`
+- **Symphonia AAC/MP3/FLAC + opus-decoder Opus + cpal sink** with explicit channel mapping and gapless-friendly defaults. Vorbis unsupported (returns UnsupportedCodec).
 
 ---
 
@@ -111,14 +118,14 @@ The hardware acceleration layer defines the unified `HwDecoder` trait:
 
 ```rust
 pub trait HwDecoder: Send {
-    fn decode_packet(
-        &mut self,
-        packet: &Packet,
-    ) -> Result<Option<DecodedFrame>, HwError>;
-
-    fn flush(&mut self) -> Result<Vec<DecodedFrame>, HwError>;
+    fn submit_packet(&mut self, packet: &Packet) -> Result<(), HwError>;
+    fn receive_frame(&mut self) -> Result<Option<DecodedFrame>, HwError>;
+    fn flush(&mut self) -> Result<(), HwError>;
     fn reset(&mut self) -> Result<(), HwError>;
 }
+// Note: Linux VA-API is a real dlopen(libva) backend. Windows D3D12 and macOS
+// VideoToolbox are currently metadata-only shims (create_decoder returns
+// NoDeviceFound); see poppy-hw/src/lib.rs.
 ```
 
 ### Backend Implementations
@@ -219,7 +226,7 @@ Poppy exports a stable, thread-safe, and panic-safe C ABI defined in `include/po
 
 | Function | Description |
 |---|---|
-| `poppy_version()` | Returns `"0.5.5"` semver string. |
+| `poppy_version()` | Returns `"0.6.0"` semver string. |
 | `poppy_open(path, &stream)` | Opens container and prepares hardware decoder. |
 | `poppy_close(stream)` | Deallocates open media stream and releases GPU contexts. |
 | `poppy_get_stream_count(stream, &count)` | Returns number of media tracks in container. |

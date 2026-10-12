@@ -37,6 +37,44 @@ fn test_dmabuf_descriptor_semantics() {
 }
 
 #[test]
+fn test_dmabuf_image_try_from_semantics() {
+    use poppy_render::DmaBufImage;
+
+    // Test with invalid negative fd
+    let invalid_desc = DmaBufDescriptor {
+        fd: -1,
+        drm_format: 0x3231564e,
+        drm_modifier: 0,
+        width: 1920,
+        height: 1080,
+        offsets: vec![0, 1920 * 1080],
+        pitches: vec![1920, 1920],
+    };
+    assert!(DmaBufImage::try_from(&invalid_desc).is_err());
+
+    // Test with valid fd
+    let raw_fd = unsafe { libc::dup(0) };
+    assert!(raw_fd >= 0);
+    let valid_desc = DmaBufDescriptor {
+        fd: raw_fd,
+        drm_format: 0x3231564e,
+        drm_modifier: 0,
+        width: 1920,
+        height: 1080,
+        offsets: vec![0, 1920 * 1080],
+        pitches: vec![1920, 1920],
+    };
+    let img = DmaBufImage::try_from(&valid_desc).expect("try_from should succeed on valid fd");
+    assert!(img.raw_fd() >= 0);
+    assert_ne!(img.raw_fd(), valid_desc.fd);
+
+    let img2 = DmaBufImage::try_from(&valid_desc).expect("second try_from should also succeed");
+    assert!(img2.raw_fd() >= 0);
+    assert_ne!(img2.raw_fd(), valid_desc.fd);
+    assert_ne!(img2.raw_fd(), img.raw_fd());
+}
+
+#[test]
 fn test_dmabuf_vulkan_zerocopy_pipeline_render() {
     let candidates = [
         "tests/samples/test_h264.mp4",

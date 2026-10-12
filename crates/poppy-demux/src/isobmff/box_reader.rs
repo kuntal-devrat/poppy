@@ -70,9 +70,22 @@ impl BoxHeader {
                 let large_size = u64::from_be_bytes([
                     data[8], data[9], data[10], data[11], data[12], data[13], data[14], data[15],
                 ]);
+                // ISO 14496-12 §4.2: largesize must be >= 16 (header itself).
+                // largesize == 0 is reserved and must be rejected (only the
+                // 32-bit size==0 form means "to EOF", and only top-level).
+                if large_size < 16 {
+                    return Err(DemuxError::InvalidBox {
+                        offset: file_offset,
+                        detail: format!(
+                            "box '{}' has invalid largesize {large_size} (must be >= 16)",
+                            fourcc_to_string(&box_type),
+                        ),
+                    });
+                }
                 (large_size, 16u8)
             }
-            // Box extends to end of file
+            // Box extends to end of file (only valid top-level; BoxIter
+            // enforces this for inner boxes).
             0 => (0u64, 8u8),
             // Normal size
             s => (s as u64, 8u8),

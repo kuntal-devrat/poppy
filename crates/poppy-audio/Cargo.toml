@@ -1,0 +1,20 @@
+[package]
+name = "poppy-audio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Pure-Rust Symphonia-backed audio decoders and cpal playback sink for Poppy"
+
+[dependencies]
+poppy-core = { workspace = true }
+bytes = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+symphonia = { workspace = true }
+opus-decoder = { workspace = true }
+cpal = { workspace = true }
+rtrb = "0.3"
+
+[dev-dependencies]
+poppy-demux = { workspace = true }

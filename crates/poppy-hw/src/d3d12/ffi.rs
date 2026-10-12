@@ -2,8 +2,12 @@
 //!
 //! Implements Microsoft Direct3D 12 Video API types, COM interfaces, and DXVA
 //! decoding structures according to `<d3d12video.h>` and `<dxva.h>`.
+//!
+//! All functions are loaded at runtime via `LoadLibraryW` / `GetProcAddress`
+//! so the crate compiles on any platform.
 
 use std::ffi::c_void;
+use std::sync::OnceLock;
 
 /// Universal Unique Identifier for COM interfaces.
 #[repr(C)]
@@ -55,6 +59,13 @@ pub const D3D12_VIDEO_DECODE_PROFILE_AV1_PROFILE0: GUID = GUID::from_values(
     [0x84, 0xe7, 0x08, 0x70, 0x96, 0x78, 0x04, 0x51],
 );
 
+pub const D3D12_VIDEO_DECODE_PROFILE_VP9_PROFILE0: GUID = GUID::from_values(
+    0x463707f8,
+    0xa1d0,
+    0x4585,
+    [0x87, 0x6d, 0x83, 0xaa, 0x6d, 0x60, 0xb8, 0x9e],
+);
+
 // Interface GUIDs
 pub const IID_ID3D12VIDEO_DEVICE: GUID = GUID::from_values(
     0x1F05141B,
@@ -84,10 +95,19 @@ pub const IID_ID3D12VIDEO_DECODE_COMMAND_LIST: GUID = GUID::from_values(
     [0xB8, 0x2E, 0xEE, 0x8A, 0x70, 0xF8, 0x95, 0xF3],
 );
 
+pub const IID_ID3D12DEVICE: GUID = GUID::from_values(
+    0x189819F1,
+    0x1DB6,
+    0x4B57,
+    [0xBE, 0x54, 0x18, 0x21, 0x33, 0x9B, 0x85, 0xF7],
+);
+
 pub type HRESULT = i32;
 pub const S_OK: HRESULT = 0;
 pub const E_FAIL: HRESULT = -2147467259; // 0x80004005
 pub const E_NOINTERFACE: HRESULT = -2147467262; // 0x80004002
+pub type HANDLE = *mut c_void;
+pub type HMODULE = *mut c_void;
 
 // DXGI Formats
 pub const DXGI_FORMAT_UNKNOWN: u32 = 0;
@@ -112,6 +132,19 @@ pub const D3D12_RESOURCE_STATE_COMMON: u32 = 0;
 pub const D3D12_RESOURCE_STATE_VIDEO_DECODE_READ: u32 = 0x10000;
 pub const D3D12_RESOURCE_STATE_VIDEO_DECODE_WRITE: u32 = 0x20000;
 pub const D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS: u32 = 0x4;
+
+// D3D_FEATURE_LEVEL
+pub const D3D_FEATURE_LEVEL_11_0: u32 = 0xb000;
+pub const D3D_FEATURE_LEVEL_12_0: u32 = 0xc000;
+
+// D3D12_HEAP_TYPE
+pub const D3D12_HEAP_TYPE_DEFAULT: u32 = 1;
+
+// D3D12_RESOURCE_DIMENSION
+pub const D3D12_RESOURCE_DIMENSION_TEXTURE2D: u32 = 3;
+
+// D3D12 texture layout
+pub const D3D12_TEXTURE_LAYOUT_UNKNOWN: u32 = 0;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
@@ -348,6 +381,144 @@ pub struct DXVA_PicParams_AV1 {
 
 impl Default for DXVA_PicParams_AV1 {
     fn default() -> Self {
+        // SAFETY: All-zeroes is a valid representation for this POD type.
         unsafe { std::mem::zeroed() }
+    }
+}
+
+/// D3D12 Resource Description (simplified for Texture2D).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct D3D12_RESOURCE_DESC {
+    pub dimension: u32,
+    pub alignment: u64,
+    pub width: u64,
+    pub height: u32,
+    pub depth_or_array_size: u16,
+    pub mip_levels: u16,
+    pub format: u32,
+    pub sample_count: u32,
+    pub sample_quality: u32,
+    pub layout: u32,
+    pub flags: u32,
+}
+
+/// D3D12 Heap Properties.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct D3D12_HEAP_PROPERTIES {
+    pub heap_type: u32,
+    pub cpu_page_property: u32,
+    pub memory_pool_preference: u32,
+    pub creation_node_mask: u32,
+    pub visible_node_mask: u32,
+}
+
+/// D3D12 Command Queue Description.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct D3D12_COMMAND_QUEUE_DESC {
+    pub type_: u32,
+    pub priority: i32,
+    pub flags: u32,
+    pub node_mask: u32,
+}
+
+// ----------- Runtime-loaded D3D12/DXGI functions -----------
+
+/// Dynamically loaded D3D12 + DXGI function table.
+///
+/// On Windows we `LoadLibraryW("d3d12.dll")` / `LoadLibraryW("dxgi.dll")` and
+/// resolve every symbol we need. On other platforms `load()` returns `None`.
+pub struct D3d12Functions {
+    _d3d12_handle: *mut c_void,
+    _dxgi_handle: *mut c_void,
+
+    pub d3d12_create_device: unsafe extern "system" fn(
+        p_adapter: *mut c_void,
+        minimum_feature_level: u32,
+        riid: *const GUID,
+        pp_device: *mut *mut c_void,
+    ) -> HRESULT,
+
+    pub create_dxgi_factory1: unsafe extern "system" fn(
+        riid: *const GUID,
+        pp_factory: *mut *mut c_void,
+    ) -> HRESULT,
+}
+
+// SAFETY: The function pointers point to system DLL functions that are
+// inherently thread-safe (D3D12 is thread-safe by design).
+unsafe impl Send for D3d12Functions {}
+unsafe impl Sync for D3d12Functions {}
+
+static D3D12_FUNCTIONS: OnceLock<Option<D3d12Functions>> = OnceLock::new();
+
+impl D3d12Functions {
+    /// Load D3D12 and DXGI symbols. Returns `None` on non-Windows or if DLLs
+    /// are missing (e.g., Windows Server Core without graphics).
+    pub fn load() -> Option<&'static Self> {
+        D3D12_FUNCTIONS
+            .get_or_init(|| {
+                #[cfg(target_os = "windows")]
+                {
+                    Self::load_windows()
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    None
+                }
+            })
+            .as_ref()
+    }
+
+    #[cfg(target_os = "windows")]
+    fn load_windows() -> Option<D3d12Functions> {
+        // On Windows we use the winapi-style LoadLibraryW / GetProcAddress.
+        // We declare them as extern "system" to call the real Win32 APIs.
+        extern "system" {
+            fn LoadLibraryW(lp_lib_file_name: *const u16) -> HMODULE;
+            fn GetProcAddress(h_module: HMODULE, lp_proc_name: *const u8) -> *mut c_void;
+        }
+
+        fn to_wide(s: &str) -> Vec<u16> {
+            s.encode_utf16().chain(std::iter::once(0)).collect()
+        }
+
+        unsafe fn sym(handle: HMODULE, name: &[u8]) -> *mut c_void {
+            unsafe { GetProcAddress(handle, name.as_ptr()) }
+        }
+
+        let d3d12_dll = to_wide("d3d12.dll");
+        let dxgi_dll = to_wide("dxgi.dll");
+
+        let d3d12_handle = unsafe { LoadLibraryW(d3d12_dll.as_ptr()) };
+        if d3d12_handle.is_null() {
+            return None;
+        }
+
+        let dxgi_handle = unsafe { LoadLibraryW(dxgi_dll.as_ptr()) };
+        if dxgi_handle.is_null() {
+            return None;
+        }
+
+        let d3d12_create_device =
+            unsafe { sym(d3d12_handle, b"D3D12CreateDevice\0") };
+        if d3d12_create_device.is_null() {
+            return None;
+        }
+
+        let create_dxgi_factory1 =
+            unsafe { sym(dxgi_handle, b"CreateDXGIFactory1\0") };
+        if create_dxgi_factory1.is_null() {
+            return None;
+        }
+
+        Some(D3d12Functions {
+            _d3d12_handle: d3d12_handle,
+            _dxgi_handle: dxgi_handle,
+            d3d12_create_device: unsafe { std::mem::transmute(d3d12_create_device) },
+            create_dxgi_factory1: unsafe { std::mem::transmute(create_dxgi_factory1) },
+        })
     }
 }

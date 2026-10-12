@@ -4,3 +4,4 @@ Cargo.lock
 fuzz/target
 target/
 scratch/
+.cargo/

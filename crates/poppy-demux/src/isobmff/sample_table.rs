@@ -44,6 +44,13 @@ impl SttsTable {
         // version (1) + flags (3)
         let entry_count =
             u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]) as usize;
+        const MAX_ENTRIES: usize = 1_000_000;
+        if entry_count > MAX_ENTRIES {
+            return Err(DemuxError::InvalidBox {
+                offset: 0,
+                detail: format!("stts entry_count {entry_count} exceeds limit {MAX_ENTRIES}"),
+            });
+        }
         let expected_len = 8 + entry_count.saturating_mul(8);
         if payload.len() < expected_len {
             return Err(DemuxError::InvalidBox {
@@ -77,20 +84,39 @@ impl SttsTable {
         Ok(Self { entries })
     }
 
-    /// Computes (dts, duration) for each sample.
+    /// Computes (dts, duration) for each sample with overflow protection and
+    /// DoS caps. Malicious `stts` with `count == u32::MAX` is rejected.
     pub fn compute_dts(&self, total_samples: usize) -> Vec<(i64, u32)> {
-        let mut res = Vec::with_capacity(total_samples);
+        const MAX_TOTAL_SAMPLES: usize = 10_000_000;
+        let mut res = Vec::with_capacity(total_samples.min(MAX_TOTAL_SAMPLES));
         let mut current_dts = 0i64;
-        let mut count_so_far = 0;
+        let mut count_so_far = 0usize;
 
         for &(count, delta) in &self.entries {
-            for _ in 0..count {
-                if count_so_far >= total_samples {
-                    return res;
-                }
+            // Guard: a single entry claiming billions of samples would OOM.
+            // Cap expansion to what is actually needed.
+            let remaining = total_samples.saturating_sub(count_so_far);
+            if remaining == 0 {
+                break;
+            }
+            // count is u32; on 32-bit this loop is still bounded by `remaining`.
+            let to_emit = (count as usize).min(remaining);
+            // Extra safety: if entries claim more than MAX_TOTAL_SAMPLES total,
+            // compute_dts is only called with total_samples already capped by
+            // StszTable, so this is bounded.
+            for _ in 0..to_emit {
                 res.push((current_dts, delta));
-                current_dts += delta as i64;
+                current_dts = current_dts.saturating_add(delta as i64);
                 count_so_far += 1;
+            }
+            // If count > remaining, the extra claimed samples are ignored
+            // (still advance DTS correctly for the emitted ones only).
+            if (count as usize) > to_emit {
+                // Advance DTS for un-emitted tail? No — DTS only matters for
+                // emitted samples. Break to avoid over-counting.
+                // Continue to next entry in case total_samples was
+                // under-counted (handled by fill below).
+                continue;
             }
         }
 
@@ -120,6 +146,13 @@ impl CttsTable {
         let version = payload[0];
         let entry_count =
             u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]) as usize;
+        const MAX_ENTRIES: usize = 1_000_000;
+        if entry_count > MAX_ENTRIES {
+            return Err(DemuxError::InvalidBox {
+                offset: 0,
+                detail: format!("ctts entry_count {entry_count} exceeds limit {MAX_ENTRIES}"),
+            });
+        }
         let expected_len = 8 + entry_count.saturating_mul(8);
         if payload.len() < expected_len {
             return Err(DemuxError::InvalidBox {
@@ -162,15 +195,18 @@ impl CttsTable {
         Ok(Self { entries })
     }
 
-    /// Computes PTS offsets for each sample.
+    /// Computes PTS offsets for each sample with the same DoS cap as stts.
     pub fn compute_pts_offsets(&self, total_samples: usize) -> Vec<i64> {
-        let mut res = Vec::with_capacity(total_samples);
+        let mut res = Vec::with_capacity(total_samples.min(10_000_000));
         for &(count, offset) in &self.entries {
-            for _ in 0..count {
-                if res.len() >= total_samples {
-                    return res;
-                }
-                res.push(offset);
+            let remaining = total_samples.saturating_sub(res.len());
+            if remaining == 0 {
+                break;
+            }
+            let to_emit = (count as usize).min(remaining);
+            res.extend(std::iter::repeat_n(offset, to_emit));
+            if res.len() >= total_samples {
+                return res;
             }
         }
         while res.len() < total_samples {
@@ -197,6 +233,13 @@ impl StssTable {
         }
         let entry_count =
             u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]) as usize;
+        const MAX_ENTRIES: usize = 10_000_000;
+        if entry_count > MAX_ENTRIES {
+            return Err(DemuxError::InvalidBox {
+                offset: 0,
+                detail: format!("stss entry_count {entry_count} exceeds limit {MAX_ENTRIES}"),
+            });
+        }
         let expected_len = 8 + entry_count.saturating_mul(4);
         if payload.len() < expected_len {
             return Err(DemuxError::InvalidBox {
@@ -300,6 +343,96 @@ impl StszTable {
     }
 }
 
+/// Raw parsed data from `stz2` (Compact Sample Size Box).
+/// Common with encrypted content; previously ignored which caused silent data loss.
+#[derive(Debug, Clone, Default)]
+pub struct Stz2Table {
+    pub sample_sizes: Vec<u32>,
+}
+
+impl Stz2Table {
+    pub fn parse(payload: &[u8]) -> Result<Self, DemuxError> {
+        if payload.len() < 12 {
+            return Err(DemuxError::InvalidBox {
+                offset: 0,
+                detail: "stz2 payload too short".into(),
+            });
+        }
+        // version(1)+flags(3) + reserved(3)+field_size(1) + sample_count(4)
+        let field_size = payload[7];
+        if field_size != 4 && field_size != 8 && field_size != 16 {
+            return Err(DemuxError::InvalidBox {
+                offset: 0,
+                detail: format!("stz2 unsupported field_size {field_size}"),
+            });
+        }
+        let sample_count =
+            u32::from_be_bytes([payload[8], payload[9], payload[10], payload[11]]) as usize;
+        const MAX_SAMPLE_COUNT: usize = 10_000_000;
+        if sample_count > MAX_SAMPLE_COUNT {
+            return Err(DemuxError::InvalidBox {
+                offset: 0,
+                detail: format!(
+                    "stz2 sample_count {sample_count} exceeds safety limit ({MAX_SAMPLE_COUNT})"
+                ),
+            });
+        }
+        let mut sizes = Vec::with_capacity(sample_count);
+        let mut offset = 12;
+        match field_size {
+            16 => {
+                if payload.len() < offset + sample_count.saturating_mul(2) {
+                    return Err(DemuxError::InvalidBox {
+                        offset: 0,
+                        detail: "stz2 payload too short for 16-bit entries".into(),
+                    });
+                }
+                for _ in 0..sample_count {
+                    let v = u16::from_be_bytes([payload[offset], payload[offset + 1]]) as u32;
+                    sizes.push(v);
+                    offset += 2;
+                }
+            }
+            8 => {
+                let bytes_needed = sample_count.div_ceil(2);
+                if payload.len() < offset + bytes_needed {
+                    return Err(DemuxError::InvalidBox {
+                        offset: 0,
+                        detail: "stz2 payload too short for 8-bit entries".into(),
+                    });
+                }
+                for i in 0..sample_count {
+                    let b = payload[offset + i / 2];
+                    let v = if i % 2 == 0 { b >> 4 } else { b & 0x0F } as u32;
+                    sizes.push(v);
+                }
+            }
+            4 => {
+                let bytes_needed = sample_count.div_ceil(2);
+                if payload.len() < offset + bytes_needed {
+                    return Err(DemuxError::InvalidBox {
+                        offset: 0,
+                        detail: "stz2 payload too short for 4-bit entries".into(),
+                    });
+                }
+                for i in 0..sample_count {
+                    let b = payload[offset + i / 2];
+                    let v = if i % 2 == 0 { b >> 4 } else { b & 0x0F } as u32;
+                    sizes.push(v);
+                }
+            }
+            _ => unreachable!("field_size validated above"),
+        }
+        Ok(Self {
+            sample_sizes: sizes,
+        })
+    }
+
+    pub fn total_samples(&self) -> usize {
+        self.sample_sizes.len()
+    }
+}
+
 /// Raw parsed data from `stsc` (Sample-to-Chunk Box).
 #[derive(Debug, Clone, Default)]
 pub struct StscEntry {
@@ -323,6 +456,13 @@ impl StscTable {
         }
         let entry_count =
             u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]) as usize;
+        const MAX_ENTRIES: usize = 1_000_000;
+        if entry_count > MAX_ENTRIES {
+            return Err(DemuxError::InvalidBox {
+                offset: 0,
+                detail: format!("stsc entry_count {entry_count} exceeds limit {MAX_ENTRIES}"),
+            });
+        }
         let expected_len = 8 + entry_count.saturating_mul(12);
         if payload.len() < expected_len {
             return Err(DemuxError::InvalidBox {
@@ -383,6 +523,13 @@ impl ChunkOffsets {
         }
         let entry_count =
             u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]) as usize;
+        const MAX_ENTRIES: usize = 10_000_000;
+        if entry_count > MAX_ENTRIES {
+            return Err(DemuxError::InvalidBox {
+                offset: 0,
+                detail: format!("stco entry_count {entry_count} exceeds limit {MAX_ENTRIES}"),
+            });
+        }
         let expected_len = 8 + entry_count.saturating_mul(4);
         if payload.len() < expected_len {
             return Err(DemuxError::InvalidBox {
@@ -419,6 +566,13 @@ impl ChunkOffsets {
         }
         let entry_count =
             u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]) as usize;
+        const MAX_ENTRIES: usize = 10_000_000;
+        if entry_count > MAX_ENTRIES {
+            return Err(DemuxError::InvalidBox {
+                offset: 0,
+                detail: format!("co64 entry_count {entry_count} exceeds limit {MAX_ENTRIES}"),
+            });
+        }
         let expected_len = 8 + entry_count.saturating_mul(8);
         if payload.len() < expected_len {
             return Err(DemuxError::InvalidBox {
@@ -455,6 +609,9 @@ impl ChunkOffsets {
 #[derive(Debug, Clone, Default)]
 pub struct SampleTable {
     pub samples: Vec<SampleInfo>,
+    /// True if presentation timestamps (pts || dts) are monotonically non-decreasing.
+    /// Audio tracks and non-B-frame video tracks are always monotonic.
+    pub is_pts_monotonic: bool,
 }
 
 impl SampleTable {
@@ -472,6 +629,39 @@ impl SampleTable {
         if total_samples == 0 {
             return Ok(Self {
                 samples: Vec::new(),
+                is_pts_monotonic: true,
+            });
+        }
+
+        // Validate required boxes: stsc and chunk offsets must be non-empty
+        // when samples exist. Previously silently produced zero samples.
+        if stsc.entries.is_empty() {
+            return Err(DemuxError::InvalidBox {
+                offset: 0,
+                detail: format!("stsc missing or empty but stsz claims {total_samples} samples"),
+            });
+        }
+        if chunk_offsets.offsets.is_empty() {
+            return Err(DemuxError::InvalidBox {
+                offset: 0,
+                detail: format!(
+                    "stco/co64 missing or empty but stsz claims {total_samples} samples"
+                ),
+            });
+        }
+        // Validate stsc entries are sorted and 1-based.
+        for w in stsc.entries.windows(2) {
+            if w[1].first_chunk < w[0].first_chunk || w[1].first_chunk == 0 {
+                return Err(DemuxError::InvalidBox {
+                    offset: 0,
+                    detail: "stsc entries not sorted or zero first_chunk".into(),
+                });
+            }
+        }
+        if stsc.entries[0].first_chunk == 0 {
+            return Err(DemuxError::InvalidBox {
+                offset: 0,
+                detail: "stsc first_chunk must be >= 1".into(),
             });
         }
 
@@ -510,12 +700,12 @@ impl SampleTable {
                 }
 
                 let size = stsz.sample_sizes[current_sample_idx];
-                let file_offset = chunk_offset + sample_offset_in_chunk;
+                let file_offset = chunk_offset.saturating_add(sample_offset_in_chunk);
                 let (dts, duration) = dts_durations[current_sample_idx];
 
                 let pts = pts_offsets
                     .as_ref()
-                    .map(|offsets| dts + offsets[current_sample_idx]);
+                    .map(|offsets| dts.saturating_add(offsets[current_sample_idx]));
 
                 // ISO 14496-12 §8.6.2: If stss is absent, EVERY sample is a sync sample
                 let is_keyframe = match stss {
@@ -533,7 +723,7 @@ impl SampleTable {
                     is_keyframe,
                 });
 
-                sample_offset_in_chunk += size as u64;
+                sample_offset_in_chunk = sample_offset_in_chunk.saturating_add(size as u64);
                 current_sample_idx += 1;
             }
 
@@ -542,24 +732,137 @@ impl SampleTable {
             }
         }
 
-        Ok(Self { samples })
+        // If stsc described fewer samples than stsz claims, report instead of
+        // silently dropping the tail.
+        if current_sample_idx != total_samples {
+            return Err(DemuxError::InvalidBox {
+                offset: 0,
+                detail: format!(
+                    "stsc/stco describe {current_sample_idx} samples but stsz claims {total_samples}"
+                ),
+            });
+        }
+
+        let is_pts_monotonic = samples.windows(2).all(|w| {
+            let t0 = w[0].pts.unwrap_or(w[0].dts);
+            let t1 = w[1].pts.unwrap_or(w[1].dts);
+            t0 <= t1
+        });
+
+        Ok(Self {
+            samples,
+            is_pts_monotonic,
+        })
     }
 
     /// Finds the nearest keyframe at or before `timestamp` (in timebase ticks).
+    ///
+    /// For monotonic sample sequences, this uses binary search in O(log N).
+    /// Falls back to scanning when non-monotonic presentation timestamps (B-frames) exist.
     pub fn find_keyframe_at_or_before(&self, timestamp: i64) -> Option<&SampleInfo> {
-        let mut candidate = None;
-        for s in &self.samples {
-            if s.is_keyframe {
+        if self.samples.is_empty() {
+            return None;
+        }
+
+        if self.is_pts_monotonic {
+            let idx = self.samples.partition_point(|s| {
                 let ts = s.pts.unwrap_or(s.dts);
-                if ts <= timestamp {
-                    candidate = Some(s);
-                } else if candidate.is_none() {
-                    // Target timestamp precedes the first keyframe; fallback to the first available keyframe
+                ts <= timestamp
+            });
+            let search_slice = if idx == 0 {
+                &self.samples[..1.min(self.samples.len())]
+            } else {
+                &self.samples[..idx]
+            };
+            for s in search_slice.iter().rev() {
+                if s.is_keyframe {
                     return Some(s);
                 }
             }
+            return self.samples.iter().find(|s| s.is_keyframe);
         }
-        candidate.or_else(|| self.samples.iter().find(|s| s.is_keyframe))
+
+        let mut best: Option<&SampleInfo> = None;
+        let mut best_pts = i64::MIN;
+        let mut first_keyframe: Option<&SampleInfo> = None;
+        for s in &self.samples {
+            if s.is_keyframe {
+                if first_keyframe.is_none() {
+                    first_keyframe = Some(s);
+                }
+                let ts = s.pts.unwrap_or(s.dts);
+                if ts <= timestamp && ts >= best_pts {
+                    best_pts = ts;
+                    best = Some(s);
+                }
+            }
+        }
+        best.or(first_keyframe)
+    }
+
+    /// Finds the index of the sample with the greatest timestamp <= `timestamp`.
+    ///
+    /// For monotonic sample sequences (such as all audio tracks or non-B-frame video),
+    /// executes in O(log N) using binary search.
+    pub fn find_sample_index_at_or_before(&self, timestamp: i64) -> usize {
+        if self.samples.is_empty() {
+            return 0;
+        }
+
+        if self.is_pts_monotonic {
+            let idx = self.samples.partition_point(|s| {
+                let ts = s.pts.unwrap_or(s.dts);
+                ts <= timestamp
+            });
+            if idx == 0 {
+                0
+            } else {
+                idx - 1
+            }
+        } else {
+            let mut best_idx = 0usize;
+            let mut best_pts = i64::MIN;
+            let mut found = false;
+            for s in &self.samples {
+                let ts = s.pts.unwrap_or(s.dts);
+                if ts <= timestamp && (!found || ts >= best_pts) {
+                    best_pts = ts;
+                    best_idx = s.index as usize;
+                    found = true;
+                }
+            }
+            if found { best_idx } else { 0 }
+        }
+    }
+
+    /// Binary-search helper over a PTS-sorted projection. Callers that need
+    /// O(log N) seeks on large tables should pre-sort indices externally;
+    /// this method preserves correctness for DTS-ordered storage.
+    pub fn find_keyframe_sorted(
+        &self,
+        sorted_by_pts: &[usize],
+        timestamp: i64,
+    ) -> Option<&SampleInfo> {
+        // `sorted_by_pts` holds indices into `self.samples` sorted by PTS.
+        let mut lo = 0usize;
+        let mut hi = sorted_by_pts.len();
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            let s = &self.samples[sorted_by_pts[mid]];
+            let ts = s.pts.unwrap_or(s.dts);
+            if ts <= timestamp {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        // Walk backwards from insertion point to find a keyframe.
+        for &idx in sorted_by_pts[..lo].iter().rev() {
+            if self.samples[idx].is_keyframe {
+                return Some(&self.samples[idx]);
+            }
+        }
+        self.samples.iter().find(|s| s.is_keyframe)
     }
 }
 

@@ -48,6 +48,7 @@ pub struct AsyncMediaStream {
     codec: CodecId,
     time_base: TimeBase,
     duration_ticks: Option<i64>,
+    estimated_frame_duration: Option<f64>,
     has_hardware_decoder: bool,
     worker_handle: Option<std::thread::JoinHandle<()>>,
 }
@@ -69,6 +70,7 @@ impl AsyncMediaStream {
         let codec = sync_stream.codec();
         let time_base = sync_stream.time_base();
         let duration_ticks = sync_stream.duration_ticks();
+        let estimated_frame_duration = sync_stream.estimated_frame_duration_seconds();
         let has_hardware_decoder = sync_stream.has_hardware_decoder();
 
         let (frame_tx, frame_rx) = mpsc::channel(builder.buffer_capacity);
@@ -90,6 +92,7 @@ impl AsyncMediaStream {
             codec,
             time_base,
             duration_ticks,
+            estimated_frame_duration,
             has_hardware_decoder,
             worker_handle: Some(worker_handle),
         })
@@ -148,7 +151,15 @@ impl AsyncMediaStream {
 
     /// Asynchronously seek to the nearest keyframe at or before `target_seconds`.
     pub async fn seek_seconds(&mut self, target_seconds: f64) -> Result<(), PoppyError> {
-        let ticks = (target_seconds * self.time_base.den as f64 / self.time_base.num as f64) as i64;
+        if !target_seconds.is_finite() {
+            return Err(PoppyError::InvalidSeek(format!(
+                "non-finite seek target {target_seconds}"
+            )));
+        }
+        if self.time_base.num == 0 || self.time_base.den == 0 {
+            return Err(PoppyError::InvalidSeek("zero timebase".into()));
+        }
+        let ticks = self.time_base.from_seconds(target_seconds);
         self.seek(ticks).await
     }
 
@@ -190,15 +201,22 @@ impl AsyncMediaStream {
     }
 
     /// Step backward by one frame based on estimated or measured frame duration.
+    /// If `frame_duration_seconds <= 0`, auto-detects from container FPS
+    /// (duration of last frame or stream average) instead of requiring caller input.
     pub async fn step_backward(
         &mut self,
         frame_duration_seconds: f64,
     ) -> Result<Option<DecodedFrame>, PoppyError> {
+        let dur = if frame_duration_seconds > 0.0 && frame_duration_seconds.is_finite() {
+            frame_duration_seconds
+        } else {
+            self.estimated_frame_duration_seconds().unwrap_or(1.0 / 30.0)
+        };
         let cur_sec = self
             .last_pts
             .map(|pts| self.time_base.to_seconds(pts))
             .unwrap_or(0.0);
-        let target_sec = (cur_sec - frame_duration_seconds).max(0.0);
+        let target_sec = (cur_sec - dur).max(0.0);
         self.scrub_to(target_sec).await
     }
 
@@ -231,6 +249,16 @@ impl AsyncMediaStream {
     /// Active stream index being demuxed and decoded.
     pub fn target_stream_index(&self) -> usize {
         self.target_stream_index
+    }
+
+    /// Returns the estimated or average frame duration in seconds from container metadata.
+    pub fn estimated_frame_duration_seconds(&self) -> Option<f64> {
+        if let Some(dur) = self.estimated_frame_duration {
+            if dur > 0.0 && dur.is_finite() {
+                return Some(dur);
+            }
+        }
+        None
     }
 
     /// Indicates whether a hardware decoder is actively bound to this stream.
@@ -286,12 +314,27 @@ impl Drop for AsyncMediaStream {
     }
 }
 
-/// Background worker loop running demuxing and hardware decoding on a dedicated thread.
+/// Background worker loop running demuxing and hardware decoding.
+///
+/// Production design:
+/// - Blocking `MediaStream::next_frame()` (which can block up to ~1s in
+///   `vaSyncSurface`) is executed via `tokio::task::spawn_blocking` by moving
+///   ownership through an `Option`, so the async executor stays responsive and
+///   seeks preempt decode within milliseconds instead of stalling.
+/// - `perform_scrub` is capped (`MAX_SCRUB_FRAMES` / timeout) so long-GOP
+///   scrubbing cannot freeze the UI thread.
 fn run_async_worker(
-    mut stream: MediaStream,
+    stream: MediaStream,
     frame_tx: mpsc::Sender<FrameMessage>,
     mut cmd_rx: mpsc::Receiver<StreamCommand>,
 ) {
+    // MediaStream is Send (Box<dyn Demuxer: Send>, Box<dyn HwDecoder: Send>),
+    // so it can be moved into spawn_blocking tasks. Static assert:
+    const fn assert_send<T: Send>() {}
+    const _ASSERT: fn() = || {
+        const _: () = assert_send::<MediaStream>();
+    };
+
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -303,6 +346,8 @@ fn run_async_worker(
     rt.block_on(async move {
         let mut current_epoch: u64 = 0;
         let mut eos = false;
+        // Ownership shuttle for spawn_blocking: stream lives here between tasks.
+        let mut holder: Option<MediaStream> = Some(stream);
 
         loop {
             if eos {
@@ -314,8 +359,14 @@ fn run_async_worker(
                     }) => {
                         current_epoch = epoch;
                         eos = false;
-                        let res = stream.seek(timestamp_ticks);
-                        let _ = ack.send(res);
+                        if let Some(s) = holder.as_mut() {
+                            let res = s.seek(timestamp_ticks);
+                            let _ = ack.send(res);
+                        } else {
+                            let _ = ack.send(Err(PoppyError::ChannelClosed(
+                                "worker stream unavailable".into(),
+                            )));
+                        }
                     }
                     Some(StreamCommand::Scrub {
                         target_seconds,
@@ -324,8 +375,14 @@ fn run_async_worker(
                     }) => {
                         current_epoch = epoch;
                         eos = false;
-                        let res = perform_scrub(&mut stream, target_seconds);
-                        let _ = ack.send(res);
+                        if let Some(s) = holder.as_mut() {
+                            let res = perform_scrub(s, target_seconds);
+                            let _ = ack.send(res);
+                        } else {
+                            let _ = ack.send(Err(PoppyError::ChannelClosed(
+                                "worker stream unavailable".into(),
+                            )));
+                        }
                     }
                     Some(StreamCommand::Close) | None => break,
                 }
@@ -341,8 +398,14 @@ fn run_async_worker(
                             ack,
                         }) => {
                             current_epoch = epoch;
-                            let res = stream.seek(timestamp_ticks);
-                            let _ = ack.send(res);
+                            if let Some(s) = holder.as_mut() {
+                                let res = s.seek(timestamp_ticks);
+                                let _ = ack.send(res);
+                            } else {
+                                let _ = ack.send(Err(PoppyError::ChannelClosed(
+                                    "worker stream unavailable".into(),
+                                )));
+                            }
                         }
                         Some(StreamCommand::Scrub {
                             target_seconds,
@@ -350,8 +413,14 @@ fn run_async_worker(
                             ack,
                         }) => {
                             current_epoch = epoch;
-                            let res = perform_scrub(&mut stream, target_seconds);
-                            let _ = ack.send(res);
+                            if let Some(s) = holder.as_mut() {
+                                let res = perform_scrub(s, target_seconds);
+                                let _ = ack.send(res);
+                            } else {
+                                let _ = ack.send(Err(PoppyError::ChannelClosed(
+                                    "worker stream unavailable".into(),
+                                )));
+                            }
                         }
                         Some(StreamCommand::Close) | None => break,
                     }
@@ -359,17 +428,74 @@ fn run_async_worker(
                 permit_res = frame_tx.reserve() => {
                     match permit_res {
                         Ok(permit) => {
-                            match stream.next_frame() {
-                                Ok(Some(frame)) => {
-                                    permit.send((current_epoch, Ok(Some(frame))));
+                            // Move stream into blocking pool, decode, move back.
+                            // This keeps seeks responsive: select! can service
+                            // cmd_rx while decode runs on the blocking pool.
+                            let mut s = match holder.take() {
+                                Some(v) => v,
+                                None => continue, // decode already in flight (unreachable single-task)
+                            };
+                            let mut join = tokio::task::spawn_blocking(move || {
+                                let r = s.next_frame();
+                                (s, r)
+                            });
+                            tokio::select! {
+                                biased;
+                                cmd = cmd_rx.recv() => {
+                                    // Seek arrived during decode: reclaim stream,
+                                    // handle command immediately, drop permit.
+                                    match (&mut join).await {
+                                        Ok((s_back, _dropped)) => {
+                                            holder = Some(s_back);
+                                        }
+                                        Err(_) => {
+                                            // Blocking task panicked; holder=None signals EOS.
+                                            holder = None;
+                                        }
+                                    }
+                                    match cmd {
+                                        Some(StreamCommand::Seek { timestamp_ticks, epoch, ack }) => {
+                                            current_epoch = epoch;
+                                            eos = false;
+                                            if let Some(h) = holder.as_mut() {
+                                                let _ = ack.send(h.seek(timestamp_ticks));
+                                            } else {
+                                                let _ = ack.send(Err(PoppyError::ChannelClosed("worker stream unavailable".into())));
+                                            }
+                                        }
+                                        Some(StreamCommand::Scrub { target_seconds, epoch, ack }) => {
+                                            current_epoch = epoch;
+                                            eos = false;
+                                            if let Some(h) = holder.as_mut() {
+                                                let _ = ack.send(perform_scrub(h, target_seconds));
+                                            } else {
+                                                let _ = ack.send(Err(PoppyError::ChannelClosed("worker stream unavailable".into())));
+                                            }
+                                        }
+                                        Some(StreamCommand::Close) | None => break,
+                                    }
                                 }
-                                Ok(None) => {
-                                    permit.send((current_epoch, Ok(None)));
-                                    eos = true;
-                                }
-                                Err(err) => {
-                                    permit.send((current_epoch, Err(err)));
-                                    break;
+                                res = &mut join => {
+                                    match res {
+                                        Ok((s_back, Ok(Some(frame)))) => {
+                                            holder = Some(s_back);
+                                            permit.send((current_epoch, Ok(Some(frame))));
+                                        }
+                                        Ok((s_back, Ok(None))) => {
+                                            holder = Some(s_back);
+                                            permit.send((current_epoch, Ok(None)));
+                                            eos = true;
+                                        }
+                                        Ok((s_back, Err(err))) => {
+                                            drop(s_back);
+                                            permit.send((current_epoch, Err(err)));
+                                            break;
+                                        }
+                                        Err(_) => {
+                                            permit.send((current_epoch, Err(PoppyError::ChannelClosed("decode task panicked".into()))));
+                                            break;
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -382,16 +508,27 @@ fn run_async_worker(
 }
 
 /// Internal helper for scrub operations: seeks to preceding keyframe and decodes forward.
+/// Capped at `MAX_SCRUB_FRAMES` / `MAX_SCRUB_TIME` so long-GOP scrubbing cannot freeze UI.
 fn perform_scrub(
     stream: &mut MediaStream,
     target_seconds: f64,
 ) -> Result<Option<DecodedFrame>, PoppyError> {
+    const MAX_SCRUB_FRAMES: usize = 300;
+    const MAX_SCRUB_TIME: std::time::Duration = std::time::Duration::from_secs(2);
+    if !target_seconds.is_finite() {
+        return Err(PoppyError::InvalidSeek(format!(
+            "non-finite scrub target {target_seconds}"
+        )));
+    }
     stream.seek_seconds(target_seconds)?;
     let time_base = stream.time_base();
+    let start = std::time::Instant::now();
     let mut best_frame = None;
     let mut min_diff = f64::MAX;
+    let mut decoded = 0usize;
 
     while let Some(frame) = stream.next_frame()? {
+        decoded += 1;
         if let Some(pts) = frame.pts {
             let frame_sec = time_base.to_seconds(pts);
             let diff = (frame_sec - target_seconds).abs();
@@ -404,6 +541,9 @@ fn perform_scrub(
             }
         } else {
             best_frame = Some(frame);
+            break;
+        }
+        if decoded >= MAX_SCRUB_FRAMES || start.elapsed() >= MAX_SCRUB_TIME {
             break;
         }
     }

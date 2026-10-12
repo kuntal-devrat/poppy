@@ -92,13 +92,20 @@ impl<'a> BitReader<'a> {
     }
 
     /// Read signed integer `su(n)` (sign bit in most significant bit).
+    /// Valid for 0 < n <= 31; n==32 would overflow i32 shift, so rejected.
     pub fn read_su(&mut self, n: usize) -> Result<i32, BitstreamError> {
         if n == 0 {
             return Ok(0);
         }
+        if n > 31 {
+            return Err(BitstreamError::InvalidSyntax(
+                "su(n) with n>31 would overflow i32",
+            ));
+        }
         let unsigned = self.read_bits(n)?;
         let sign_bit = 1u32 << (n - 1);
         if (unsigned & sign_bit) != 0 {
+            // n<=31 so 1i32<<n is safe.
             let val = unsigned as i32 - (1i32 << n);
             Ok(val)
         } else {
@@ -118,11 +125,8 @@ impl<'a> BitReader<'a> {
             }
         }
 
-        if leading_zeros >= 32 {
-            return Ok(0xFFFFFFFF);
-        }
-
         let value = self.read_bits(leading_zeros)?;
+        // leading_zeros < 32 here, so shift is safe.
         Ok((1u32 << leading_zeros) - 1 + value)
     }
 

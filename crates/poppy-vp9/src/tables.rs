@@ -131,7 +131,7 @@ pub fn calculate_segment_qmul(
     delta_q_y_dc: i8,
     delta_q_uv_dc: i8,
     delta_q_uv_ac: i8,
-    seg_q_val: Option<i8>,
+    seg_q_val: Option<i16>,
     seg_abs: bool,
 ) -> (i16, i16, i16, i16) {
     let bpp_idx = match bit_depth {

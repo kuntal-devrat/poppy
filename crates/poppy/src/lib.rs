@@ -21,9 +21,14 @@ pub use async_stream::AsyncMediaStream;
 pub use builder::MediaStreamBuilder;
 pub use error::PoppyError;
 pub use pipeline::MediaStream;
-pub use poppy_core::{CodecId, InterlaceMode, Packet, PixelFormat, StreamInfo, TimeBase};
+pub use poppy_audio::{AudioClock, AudioDecoder, AudioSink};
+pub use poppy_core::{
+    AudioConfig, AudioFrame, AudioSampleFormat, ChannelLayout, CodecId, InterlaceMode, Packet,
+    PixelFormat, StreamInfo, TimeBase,
+};
 pub use poppy_hw::DecodedFrame;
 
+pub use poppy_audio as audio;
 pub use poppy_av1 as av1;
 pub use poppy_core as core;
 pub use poppy_demux as demux;

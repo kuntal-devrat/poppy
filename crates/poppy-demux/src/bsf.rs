@@ -21,6 +21,9 @@ pub enum BsfError {
         expected: usize,
         available: usize,
     },
+
+    #[error("empty NAL unit at offset {offset} (zero-length NAL rejected)")]
+    EmptyNal { offset: usize },
 }
 
 /// Start code prefixes for Annex-B streams.
@@ -50,9 +53,13 @@ pub fn avcc_to_annex_b(
 
     let nls = nal_length_size as usize;
 
-    // Estimate capacity to reduce reallocations
-    let param_sets_len: usize = param_sets.map_or(0, |ps| ps.iter().map(|s| 4 + s.len()).sum());
-    output.reserve(param_sets_len + data.len() + 32);
+    // Estimate capacity to reduce reallocations (saturating to avoid overflow).
+    let param_sets_len: usize = param_sets.map_or(0, |ps| {
+        ps.iter()
+            .map(|s| 4usize.saturating_add(s.len()))
+            .fold(0usize, |a, b| a.saturating_add(b))
+    });
+    output.reserve(param_sets_len.saturating_add(data.len()).saturating_add(32));
 
     // If parameter sets are provided (e.g. on keyframe), emit them first with 4-byte start codes
     if let Some(ps_list) = param_sets {
@@ -62,44 +69,7 @@ pub fn avcc_to_annex_b(
         }
     }
 
-    let mut cursor = 0;
-    while cursor < data.len() {
-        if cursor + nls > data.len() {
-            return Err(BsfError::TruncatedNal {
-                offset: cursor,
-                expected: nls,
-                available: data.len() - cursor,
-            });
-        }
-
-        let nal_len = match nal_length_size {
-            1 => data[cursor] as usize,
-            2 => u16::from_be_bytes([data[cursor], data[cursor + 1]]) as usize,
-            4 => u32::from_be_bytes([
-                data[cursor],
-                data[cursor + 1],
-                data[cursor + 2],
-                data[cursor + 3],
-            ]) as usize,
-            _ => unreachable!(),
-        };
-
-        cursor += nls;
-
-        if cursor + nal_len > data.len() {
-            return Err(BsfError::TruncatedNal {
-                offset: cursor,
-                expected: nal_len,
-                available: data.len() - cursor,
-            });
-        }
-
-        output.extend_from_slice(&ANNEX_B_START_CODE_4);
-        output.extend_from_slice(&data[cursor..cursor + nal_len]);
-        cursor += nal_len;
-    }
-
-    Ok(())
+    convert_length_prefixed_to_annex_b(data, nls, output)
 }
 
 /// Converts HVCC-framed HEVC NAL units (length-prefixed) into Annex-B format
@@ -121,10 +91,28 @@ pub fn hevc_to_annex_b(
 
     let nls = nal_length_size as usize;
 
-    let vps_len: usize = vps_list.map_or(0, |l| l.iter().map(|s| 4 + s.len()).sum());
-    let sps_len: usize = sps_list.map_or(0, |l| l.iter().map(|s| 4 + s.len()).sum());
-    let pps_len: usize = pps_list.map_or(0, |l| l.iter().map(|s| 4 + s.len()).sum());
-    output.reserve(vps_len + sps_len + pps_len + data.len() + 32);
+    let vps_len: usize = vps_list.map_or(0, |l| {
+        l.iter()
+            .map(|s| 4usize.saturating_add(s.len()))
+            .fold(0usize, |a, b| a.saturating_add(b))
+    });
+    let sps_len: usize = sps_list.map_or(0, |l| {
+        l.iter()
+            .map(|s| 4usize.saturating_add(s.len()))
+            .fold(0usize, |a, b| a.saturating_add(b))
+    });
+    let pps_len: usize = pps_list.map_or(0, |l| {
+        l.iter()
+            .map(|s| 4usize.saturating_add(s.len()))
+            .fold(0usize, |a, b| a.saturating_add(b))
+    });
+    output.reserve(
+        vps_len
+            .saturating_add(sps_len)
+            .saturating_add(pps_len)
+            .saturating_add(data.len())
+            .saturating_add(32),
+    );
 
     if let Some(list) = vps_list {
         for nalu in list {
@@ -147,6 +135,17 @@ pub fn hevc_to_annex_b(
         }
     }
 
+    convert_length_prefixed_to_annex_b(data, nls, output)
+}
+
+/// Shared length-prefixed → Annex-B loop.
+/// Rejects zero-length NALs (previously emitted a bare start code which
+/// confuses decoders) and returns structured errors instead of panicking.
+fn convert_length_prefixed_to_annex_b(
+    data: &[u8],
+    nls: usize,
+    output: &mut Vec<u8>,
+) -> Result<(), BsfError> {
     let mut cursor = 0;
     while cursor < data.len() {
         if cursor + nls > data.len() {
@@ -157,7 +156,7 @@ pub fn hevc_to_annex_b(
             });
         }
 
-        let nal_len = match nal_length_size {
+        let nal_len = match nls {
             1 => data[cursor] as usize,
             2 => u16::from_be_bytes([data[cursor], data[cursor + 1]]) as usize,
             4 => u32::from_be_bytes([
@@ -166,8 +165,16 @@ pub fn hevc_to_annex_b(
                 data[cursor + 2],
                 data[cursor + 3],
             ]) as usize,
-            _ => unreachable!(),
+            _ => {
+                return Err(BsfError::UnsupportedNalLengthSize(nls as u8));
+            }
         };
+
+        // Zero-length NALs are corrupt; skip with an error instead of emitting
+        // a bare start code.
+        if nal_len == 0 {
+            return Err(BsfError::EmptyNal { offset: cursor });
+        }
 
         cursor += nls;
 

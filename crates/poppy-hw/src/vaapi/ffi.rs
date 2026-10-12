@@ -17,6 +17,10 @@ pub type VAEntrypoint = c_int;
 pub type VABufferType = c_int;
 
 pub const VA_STATUS_SUCCESS: VAStatus = 0;
+/// libva va.h status codes (subset). 34 == HW_BUSY (retryable), 23 == decode error (conceal).
+pub const VA_STATUS_ERROR_HW_BUSY: VAStatus = 34;
+pub const VA_STATUS_ERROR_DECODING_ERROR: VAStatus = 23;
+pub const VA_STATUS_ERROR_DECODE_ERROR: VAStatus = 23;
 pub const VA_RT_FORMAT_YUV420: c_uint = 0x00000001;
 pub const VA_RT_FORMAT_YUV420_10: c_uint = 0x00000100;
 

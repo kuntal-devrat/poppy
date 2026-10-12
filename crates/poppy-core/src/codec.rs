@@ -21,6 +21,7 @@ pub enum CodecId {
     Opus,
     Mp3,
     Flac,
+    Vorbis,
 
     /// Unknown or unsupported codec. The `u32` is the raw FourCC or codec tag.
     Unknown(u32),
@@ -30,16 +31,22 @@ impl CodecId {
     /// Attempt to identify a codec from an ISOBMFF sample entry FourCC.
     ///
     /// Reference: ISO 14496-12 §8.5.2, ISO 14496-15 §5.3.4
+    ///
+    /// Note: `mp4a` is ambiguous (AAC, MP3, AC-3, ALAC all use `mp4a` with
+    /// different `esds` object types). This maps to AAC by default; use
+    /// [`CodecId::from_mp4_fourcc_with_esds`] when the `esds` object type is
+    /// available.
     pub fn from_mp4_fourcc(fourcc: &[u8; 4]) -> Self {
         match fourcc {
             b"avc1" | b"avc3" => CodecId::H264,
             b"hev1" | b"hvc1" => CodecId::Hevc,
             b"av01" => CodecId::Av1,
             b"vp09" => CodecId::Vp9,
-            b"mp4a" => CodecId::Aac, // Could also be other MPEG-4 audio; refine via esds
+            b"mp4a" => CodecId::Aac, // ambiguous; refine via esds when available
             b"Opus" => CodecId::Opus,
             b".mp3" | b"mp3 " => CodecId::Mp3,
             b"fLaC" => CodecId::Flac,
+            b"vorb" | b"vor1" => CodecId::Vorbis,
             other => {
                 let raw = u32::from_be_bytes(*other);
                 CodecId::Unknown(raw)
@@ -47,7 +54,26 @@ impl CodecId {
         }
     }
 
+    /// Refine `mp4a` using the `esds` DecoderConfig `objectTypeIndication`.
+    /// `0x40` = AAC, `0x66/0x67/0x69` = MP3, `0xA5` = AC-3 (unsupported),
+    /// `0xAC` = Opus-ish, others fall back to `from_mp4_fourcc`.
+    pub fn from_mp4_fourcc_with_esds(fourcc: &[u8; 4], object_type: Option<u8>) -> Self {
+        if fourcc != b"mp4a" {
+            return Self::from_mp4_fourcc(fourcc);
+        }
+        match object_type {
+            Some(0x40) => CodecId::Aac,
+            Some(0x66) | Some(0x67) | Some(0x69) => CodecId::Mp3,
+            Some(0xA5) | Some(0xA6) => CodecId::Unknown(0x61332D63), // "ac-3"
+            _ => CodecId::Aac,
+        }
+    }
+
     /// Attempt to identify a codec from a Matroska CodecID string.
+    ///
+    /// Unknown IDs are hashed with FNV-1a into `Unknown(u32)` so distinct
+    /// strings (e.g. `V_VP8` vs `S_TEXT/UTF8`) remain distinguishable instead
+    /// of collapsing to `Unknown(0)`.
     ///
     /// Reference: Matroska specification, §8.1 Codec ID
     pub fn from_matroska_codec_id(id: &str) -> Self {
@@ -60,7 +86,8 @@ impl CodecId {
             "A_OPUS" => CodecId::Opus,
             "A_MPEG/L3" => CodecId::Mp3,
             "A_FLAC" => CodecId::Flac,
-            _ => CodecId::Unknown(0),
+            "A_VORBIS" => CodecId::Vorbis,
+            _ => CodecId::Unknown(fnv1a32(id)),
         }
     }
 
@@ -75,6 +102,7 @@ impl CodecId {
             CodecId::Opus => "Opus",
             CodecId::Mp3 => "MP3",
             CodecId::Flac => "FLAC",
+            CodecId::Vorbis => "Vorbis",
             CodecId::Unknown(_) => "Unknown",
         }
     }
@@ -84,6 +112,18 @@ impl std::fmt::Display for CodecId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.name())
     }
+}
+
+/// FNV-1a 32-bit hash for unknown Matroska CodecIDs so distinct strings do
+/// not collapse to the same `Unknown(0)`.
+fn fnv1a32(s: &str) -> u32 {
+    let mut h: u32 = 0x811c_9dc5;
+    for b in s.bytes() {
+        h ^= b as u32;
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    // Avoid 0 so "unknown, hashed" is distinguishable from legacy Unknown(0).
+    if h == 0 { 1 } else { h }
 }
 
 /// Codec-specific configuration extracted from the container.
@@ -504,8 +544,21 @@ impl Av1CRecord {
     }
 
     /// Returns `true` if this AV1 stream is 10-bit or 12-bit.
+    /// Per AV1-ISOBMFF binding: `high_bitdepth==1` means 10-bit, and
+    /// `twelve_bit==1` implies 12-bit (which is >= 10-bit for pipeline purposes).
     pub fn is_10bit(&self) -> bool {
-        self.high_bitdepth
+        self.high_bitdepth || self.twelve_bit
+    }
+
+    /// Exact bit depth: 8, 10, or 12.
+    pub fn bit_depth(&self) -> u8 {
+        if self.twelve_bit {
+            12
+        } else if self.high_bitdepth {
+            10
+        } else {
+            8
+        }
     }
 }
 
@@ -539,13 +592,30 @@ impl VpcCRecord {
         &self.raw
     }
 
-    /// Parses a `vpcC` box payload from raw bytes (supports both FullBox and raw record format).
+    /// Parses a `vpcC` box payload from raw bytes.
+    ///
+    /// The VP Codec ISO binding defines `vpcC` as a FullBox (1B version +
+    /// 3B flags, all zero except version==1). Some WebM-derived muxers store
+    /// the raw 8-byte record without the FullBox header. We detect FullBox
+    /// strictly: `len >= 12` (or 10 for the minimal form), `data[0] <= 1`
+    /// (version) and `data[1..4] == [0,0,0]` (flags). The previous heuristic
+    /// (`data[0]==0||1` alone) misclassified raw records starting with
+    /// profile 0/1 as FullBox and parsed garbage.
     pub fn parse(data: &[u8]) -> Result<Self, VpcCParseError> {
-        let (offset, _version) = if data.len() >= 10 && (data[0] == 0 || data[0] == 1) {
+        let is_fullbox = data.len() >= 10
+            && data[0] <= 1
+            && data.len() >= 4
+            && data[1] == 0
+            && data[2] == 0
+            && data[3] == 0;
+        let (offset, _version) = if is_fullbox {
             // FullBox: 1 byte version + 3 bytes flags
+            if data[0] != 0 && data[0] != 1 {
+                return Err(VpcCParseError::UnsupportedVersion(data[0]));
+            }
             (4, data[0])
         } else if data.len() >= 6 {
-            // Direct record
+            // Direct record (6 bytes: profile/level/etc.)
             (0, 1)
         } else {
             return Err(VpcCParseError::TooShort {
@@ -586,8 +656,11 @@ impl VpcCRecord {
     }
 
     /// Returns `true` if this VP9 stream has 10-bit or 12-bit depth.
+    /// Trusts the signalled `bit_depth` field. Profile is informational only
+    /// (profile 2/3 *usually* means 10/12-bit, but a lying header must not
+    /// force a 10-bit pipeline).
     pub fn is_10bit(&self) -> bool {
-        self.bit_depth >= 10 || self.profile >= 2
+        self.bit_depth >= 10
     }
 }
 
@@ -605,6 +678,108 @@ pub struct AudioConfig {
 
     /// Codec-specific initialization data (e.g., AudioSpecificConfig for AAC).
     pub extradata: Option<Bytes>,
+}
+
+/// Audio sample format of decoded PCM data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AudioSampleFormat {
+    /// 32-bit floating point, planar (channel-by-channel).
+    F32Planar,
+    /// 32-bit floating point, interleaved (L, R, L, R...).
+    F32Interleaved,
+    /// 16-bit signed integer, interleaved.
+    I16Interleaved,
+    /// 32-bit signed integer, interleaved.
+    I32Interleaved,
+}
+
+/// Channel layout configuration for audio streams.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ChannelLayout {
+    Mono,
+    Stereo,
+    Surround51,
+    Surround71,
+    Custom(u16),
+}
+
+impl ChannelLayout {
+    pub fn channels(&self) -> u16 {
+        match self {
+            Self::Mono => 1,
+            Self::Stereo => 2,
+            Self::Surround51 => 6,
+            Self::Surround71 => 8,
+            Self::Custom(c) => *c,
+        }
+    }
+
+    pub fn from_channels(channels: u16) -> Self {
+        match channels {
+            1 => Self::Mono,
+            2 => Self::Stereo,
+            6 => Self::Surround51,
+            8 => Self::Surround71,
+            other => Self::Custom(other),
+        }
+    }
+}
+
+/// A decoded audio frame containing uncompressed PCM audio samples.
+///
+/// `samples` layout must match `format`: interleaved formats store
+/// `L,R,L,R...`, planar formats store all samples of channel 0, then channel
+/// 1, etc. Constructors must uphold
+/// `samples.len() == num_samples_per_channel * channels as usize`.
+#[derive(Debug, Clone)]
+pub struct AudioFrame {
+    /// Presentation timestamp in container timebase units, if available.
+    pub pts: Option<i64>,
+    /// Sample rate in Hertz (e.g. 44100, 48000).
+    pub sample_rate: u32,
+    /// Number of audio channels.
+    pub channels: u16,
+    /// Channel layout.
+    pub channel_layout: ChannelLayout,
+    /// Audio sample representation format.
+    pub format: AudioSampleFormat,
+    /// Normalized floating point samples [-1.0, 1.0] in `format` layout.
+    pub samples: Vec<f32>,
+    /// Number of audio samples per channel.
+    pub num_samples_per_channel: usize,
+}
+
+impl AudioFrame {
+    /// Validate invariants; returns an error string on mismatch.
+    pub fn validate(&self) -> Result<(), String> {
+        let expected = self
+            .num_samples_per_channel
+            .saturating_mul(self.channels as usize);
+        if self.samples.len() != expected {
+            return Err(format!(
+                "AudioFrame samples len {} != {}x{} ({expected})",
+                self.samples.len(),
+                self.num_samples_per_channel,
+                self.channels
+            ));
+        }
+        if self.sample_rate == 0 {
+            return Err("AudioFrame sample_rate is 0".into());
+        }
+        if self.channels == 0 {
+            return Err("AudioFrame channels is 0".into());
+        }
+        Ok(())
+    }
+
+    /// Calculate the duration of this audio frame in seconds.
+    pub fn duration_seconds(&self) -> f64 {
+        if self.sample_rate == 0 {
+            0.0
+        } else {
+            self.num_samples_per_channel as f64 / self.sample_rate as f64
+        }
+    }
 }
 
 #[cfg(test)]

@@ -15,6 +15,7 @@ poppy-hevc = { workspace = true }
 poppy-av1 = { workspace = true }
 poppy-hw = { workspace = true }
 poppy-render = { workspace = true }
+poppy-audio = { workspace = true }
 clap = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

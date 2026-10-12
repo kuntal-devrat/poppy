@@ -124,6 +124,8 @@ impl Tfhd {
 }
 
 /// Parses a top-level `moof` box and appends reconstructed sample metadata to `tracks`.
+/// `moof_offset` must be the byte offset of the `moof` box header itself
+/// (not the body), per ISO 14496-12 §8.8.7 default-base-is-moof.
 pub fn parse_moof(
     moof_body: &[u8],
     moof_offset: u64,
@@ -191,18 +193,21 @@ fn parse_traf(
         None => return Ok(()),
     };
 
-    // Base data offset resolution (ISO 14496-12 §8.8.8)
+    // Base data offset resolution (ISO 14496-12 §8.8.8).
+    // default-base-is-moof means the moof box start (header), not body.
     let base_offset = tfhd.base_data_offset.unwrap_or(moof_offset);
 
-    // Track running DTS
-    let mut current_dts = tfdt_decode_time.unwrap_or_else(|| {
-        track
-            .sample_table
-            .samples
-            .last()
-            .map(|s| (s.dts + s.duration as i64) as u64)
-            .unwrap_or(0)
-    }) as i64;
+    // Track running DTS with saturating math (prevents i64 wrap on corrupt tfdt).
+    let mut current_dts = tfdt_decode_time
+        .map(|v| v.min(i64::MAX as u64) as i64)
+        .unwrap_or_else(|| {
+            track
+                .sample_table
+                .samples
+                .last()
+                .map(|s| s.dts.saturating_add(s.duration as i64))
+                .unwrap_or(0)
+        });
 
     // Second pass: process `trun` boxes
     for (header, body, _) in child_boxes {
@@ -231,6 +236,13 @@ fn parse_trun(
     let version = body[0];
     let flags = u32::from_be_bytes([0, body[1], body[2], body[3]]);
     let sample_count = u32::from_be_bytes([body[4], body[5], body[6], body[7]]) as usize;
+    const MAX_TRUN_SAMPLES: usize = 10_000_000;
+    if sample_count > MAX_TRUN_SAMPLES {
+        return Err(DemuxError::InvalidBox {
+            offset: 0,
+            detail: format!("trun sample_count {sample_count} exceeds limit {MAX_TRUN_SAMPLES}"),
+        });
+    }
 
     let data_offset_present = flags & 0x000001 != 0;
     let first_sample_flags_present = flags & 0x000004 != 0;
@@ -273,7 +285,12 @@ fn parse_trun(
         None
     };
 
-    let mut file_offset = (base_offset as i64 + data_offset as i64) as u64;
+    let mut file_offset = base_offset
+        .checked_add_signed(data_offset as i64)
+        .ok_or_else(|| DemuxError::InvalidBox {
+            offset: base_offset,
+            detail: format!("trun data_offset {data_offset} underflows base {base_offset}"),
+        })?;
 
     for i in 0..sample_count {
         let duration = if sample_duration_present {
@@ -289,7 +306,9 @@ fn parse_trun(
             cursor += 4;
             d
         } else {
-            tfhd.default_sample_duration.unwrap_or(0)
+            tfhd.default_sample_duration
+                .or(track.trex.as_ref().map(|t| t.default_sample_duration))
+                .unwrap_or(0)
         };
 
         let size = if sample_size_present {
@@ -305,7 +324,9 @@ fn parse_trun(
             cursor += 4;
             s
         } else {
-            tfhd.default_sample_size.unwrap_or(0)
+            tfhd.default_sample_size
+                .or(track.trex.as_ref().map(|t| t.default_sample_size))
+                .unwrap_or(0)
         };
 
         let sample_flags = if i == 0 && first_sample_flags.is_some() {
@@ -323,7 +344,9 @@ fn parse_trun(
             cursor += 4;
             f
         } else {
-            tfhd.default_sample_flags.unwrap_or(0)
+            tfhd.default_sample_flags
+                .or(track.trex.as_ref().map(|t| t.default_sample_flags))
+                .unwrap_or(0)
         };
 
         let composition_offset = if sample_composition_time_present {
@@ -352,7 +375,7 @@ fn parse_trun(
         };
 
         let dts = *current_dts;
-        let pts = composition_offset.map(|c| dts + c);
+        let pts = composition_offset.map(|c| dts.saturating_add(c));
 
         // In ISOBMFF sample_flags: bit 24 is `sample_is_non_sync_sample` (0 = keyframe, 1 = non-keyframe)
         // If sample_flags == 0 and it's the first sample of run or sync sample
@@ -370,8 +393,8 @@ fn parse_trun(
             is_keyframe,
         });
 
-        file_offset += size as u64;
-        *current_dts += duration as i64;
+        file_offset = file_offset.saturating_add(size as u64);
+        *current_dts = current_dts.saturating_add(duration as i64);
     }
 
     Ok(())

@@ -29,6 +29,26 @@ impl HevcSliceType {
     }
 }
 
+/// Prediction weight table (H.265 §7.3.6.3). Previously parsed-and-discarded;
+/// now stored for VA-API `luma/chroma_weight/offset` mapping.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PredWeightTable {
+    pub luma_log2_weight_denom: u32,
+    pub delta_chroma_log2_weight_denom: i32,
+    pub luma_weight_l0_flag: Vec<bool>,
+    pub chroma_weight_l0_flag: Vec<bool>,
+    pub delta_luma_weight_l0: Vec<i32>,
+    pub luma_offset_l0: Vec<i32>,
+    pub delta_chroma_weight_l0: Vec<[i32; 2]>,
+    pub chroma_offset_l0: Vec<[i32; 2]>,
+    pub luma_weight_l1_flag: Vec<bool>,
+    pub chroma_weight_l1_flag: Vec<bool>,
+    pub delta_luma_weight_l1: Vec<i32>,
+    pub luma_offset_l1: Vec<i32>,
+    pub delta_chroma_weight_l1: Vec<[i32; 2]>,
+    pub chroma_offset_l1: Vec<[i32; 2]>,
+}
+
 /// Parsed HEVC Slice Segment Header.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SliceSegmentHeader {
@@ -55,6 +75,7 @@ pub struct SliceSegmentHeader {
     pub five_minus_max_num_merge_cand: u8,
     pub st_rps_bits: u32,
     pub slice_data_byte_offset: usize,
+    pub pred_weights: Option<PredWeightTable>,
 }
 
 impl SliceSegmentHeader {
@@ -121,6 +142,7 @@ impl SliceSegmentHeader {
             pps.pps_loop_filter_across_slices_enabled_flag;
         let mut five_minus_max_num_merge_cand = 0u8;
         let mut st_rps_bits = 0;
+        let mut pred_weights: Option<PredWeightTable> = None;
 
         if !dependent_slice_segment_flag {
             if pps.num_extra_slice_header_bits > 0 {
@@ -210,10 +232,26 @@ impl SliceSegmentHeader {
                 if (pps.weighted_pred_flag && slice_type == HevcSliceType::P)
                     || (pps.weighted_bipred_flag && slice_type == HevcSliceType::B)
                 {
-                    let _luma_log2_weight_denom = reader.read_ue()?;
-                    if !sps.separate_colour_plane_flag && sps.chroma_format_idc != 0 {
-                        let _delta_chroma_log2_weight_denom = reader.read_se()?;
+                    let luma_log2_weight_denom = reader.read_ue()?;
+                    if luma_log2_weight_denom > 7 {
+                        return Err(BitstreamError::InvalidSyntax(format!(
+                            "luma_log2_weight_denom {luma_log2_weight_denom} exceeds 7"
+                        )));
                     }
+                    let mut delta_chroma_log2_weight_denom = 0;
+                    if !sps.separate_colour_plane_flag && sps.chroma_format_idc != 0 {
+                        delta_chroma_log2_weight_denom = reader.read_se()?;
+                        if !(-7..=7).contains(&delta_chroma_log2_weight_denom) {
+                            return Err(BitstreamError::InvalidSyntax(format!(
+                                "delta_chroma_log2_weight_denom {delta_chroma_log2_weight_denom} out of -7..7"
+                            )));
+                        }
+                    }
+                    let mut pw = PredWeightTable {
+                        luma_log2_weight_denom,
+                        delta_chroma_log2_weight_denom,
+                        ..Default::default()
+                    };
                     let mut luma_weight_l0 = Vec::with_capacity(num_ref_idx_l0_active as usize);
                     for _ in 0..num_ref_idx_l0_active {
                         luma_weight_l0.push(reader.read_bit()?);
@@ -224,15 +262,21 @@ impl SliceSegmentHeader {
                             chroma_weight_l0.push(reader.read_bit()?);
                         }
                     }
+                    pw.luma_weight_l0_flag = luma_weight_l0.clone();
+                    pw.chroma_weight_l0_flag = chroma_weight_l0.clone();
+                    pw.delta_luma_weight_l0 = vec![0; num_ref_idx_l0_active as usize];
+                    pw.luma_offset_l0 = vec![0; num_ref_idx_l0_active as usize];
+                    pw.delta_chroma_weight_l0 = vec![[0; 2]; num_ref_idx_l0_active as usize];
+                    pw.chroma_offset_l0 = vec![[0; 2]; num_ref_idx_l0_active as usize];
                     for (i, &flag) in luma_weight_l0.iter().enumerate() {
                         if flag {
-                            let _ = reader.read_se()?;
-                            let _ = reader.read_se()?;
+                            pw.delta_luma_weight_l0[i] = reader.read_se()?;
+                            pw.luma_offset_l0[i] = reader.read_se()?;
                         }
                         if chroma_weight_l0.get(i).copied().unwrap_or(false) {
-                            for _ in 0..2 {
-                                let _ = reader.read_se()?;
-                                let _ = reader.read_se()?;
+                            for c in 0..2 {
+                                pw.delta_chroma_weight_l0[i][c] = reader.read_se()?;
+                                pw.chroma_offset_l0[i][c] = reader.read_se()?;
                             }
                         }
                     }
@@ -248,19 +292,26 @@ impl SliceSegmentHeader {
                                 chroma_weight_l1.push(reader.read_bit()?);
                             }
                         }
+                        pw.luma_weight_l1_flag = luma_weight_l1.clone();
+                        pw.chroma_weight_l1_flag = chroma_weight_l1.clone();
+                        pw.delta_luma_weight_l1 = vec![0; num_ref_idx_l1_active as usize];
+                        pw.luma_offset_l1 = vec![0; num_ref_idx_l1_active as usize];
+                        pw.delta_chroma_weight_l1 = vec![[0; 2]; num_ref_idx_l1_active as usize];
+                        pw.chroma_offset_l1 = vec![[0; 2]; num_ref_idx_l1_active as usize];
                         for (i, &flag) in luma_weight_l1.iter().enumerate() {
                             if flag {
-                                let _ = reader.read_se()?;
-                                let _ = reader.read_se()?;
+                                pw.delta_luma_weight_l1[i] = reader.read_se()?;
+                                pw.luma_offset_l1[i] = reader.read_se()?;
                             }
                             if chroma_weight_l1.get(i).copied().unwrap_or(false) {
-                                for _ in 0..2 {
-                                    let _ = reader.read_se()?;
-                                    let _ = reader.read_se()?;
+                                for c in 0..2 {
+                                    pw.delta_chroma_weight_l1[i][c] = reader.read_se()?;
+                                    pw.chroma_offset_l1[i][c] = reader.read_se()?;
                                 }
                             }
                         }
                     }
+                    pred_weights = Some(pw);
                 }
 
                 five_minus_max_num_merge_cand = reader.read_ue()? as u8;
@@ -344,6 +395,7 @@ impl SliceSegmentHeader {
             five_minus_max_num_merge_cand,
             st_rps_bits,
             slice_data_byte_offset,
+            pred_weights,
         })
     }
 }

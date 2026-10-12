@@ -13,6 +13,31 @@ pub struct FrameCropping {
     pub bottom: u32,
 }
 
+/// VUI parameters (ITU-T H.264 Annex E). Previously ignored; now parsed for
+/// aspect ratio, timing (fps), and colour description needed by render/HDR.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct VuiParameters {
+    pub aspect_ratio_info_present: bool,
+    pub aspect_ratio_idc: u8,
+    pub sar_width: u32,
+    pub sar_height: u32,
+    pub overscan_info_present: bool,
+    pub overscan_appropriate: bool,
+    pub video_signal_type_present: bool,
+    pub video_format: u8,
+    pub video_full_range: bool,
+    pub colour_description_present: bool,
+    pub colour_primaries: u8,
+    pub transfer_characteristics: u8,
+    pub matrix_coefficients: u8,
+    pub chroma_loc_info_present: bool,
+    pub timing_info_present: bool,
+    pub num_units_in_tick: u32,
+    pub time_scale: u32,
+    pub fixed_frame_rate: bool,
+    pub hrd_parameters_present: bool,
+}
+
 /// A parsed H.264 Sequence Parameter Set (SPS).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sps {
@@ -52,13 +77,22 @@ pub struct Sps {
     pub direct_8x8_inference_flag: bool,
 
     pub frame_cropping: Option<FrameCropping>,
+
+    /// VUI parameters if present (aspect, timing, colour, HRD).
+    pub vui: Option<VuiParameters>,
 }
 
 impl Sps {
     /// Parse an SPS from a raw NAL unit (with or without 1-byte NAL header).
     pub fn parse(nal_data: &[u8]) -> Result<Self, BitstreamError> {
-        // Strip NAL header byte if present (SPS NAL unit type is 7)
-        let payload = if !nal_data.is_empty() && (nal_data[0] & 0x1F) == 7 {
+        // Strip NAL header byte if present (SPS NAL unit type is 7).
+        // Require forbidden_zero_bit==0 to avoid mis-stripping RBSP whose
+        // first byte happens to have low 5 bits == 7.
+        let payload = if !nal_data.is_empty()
+            && (nal_data[0] & 0x1F) == 7
+            && (nal_data[0] & 0x80) == 0
+            && nal_data.len() >= 2
+        {
             &nal_data[1..]
         } else {
             nal_data
@@ -77,6 +111,11 @@ impl Sps {
         let _reserved_zero_2bits = r.read_bits(2)?;
         let level_idc = r.read_bits(8)? as u8;
         let seq_parameter_set_id = r.read_ue()?;
+        if seq_parameter_set_id > 31 {
+            return Err(BitstreamError::InvalidSyntax(format!(
+                "seq_parameter_set_id {seq_parameter_set_id} exceeds 31"
+            )));
+        }
 
         let mut chroma_format_idc = 1; // Default: 4:2:0
         let mut separate_colour_plane_flag = false;
@@ -89,12 +128,25 @@ impl Sps {
             profile_idc,
             100 | 110 | 122 | 244 | 44 | 83 | 86 | 118 | 128 | 138 | 139 | 134 | 135
         ) {
-            chroma_format_idc = r.read_ue()? as u8;
+            let cfi = r.read_ue()?;
+            if cfi > 3 {
+                return Err(BitstreamError::InvalidSyntax(format!(
+                    "chroma_format_idc {cfi} exceeds 3"
+                )));
+            }
+            chroma_format_idc = cfi as u8;
             if chroma_format_idc == 3 {
                 separate_colour_plane_flag = r.read_bit()?;
             }
-            bit_depth_luma_minus8 = r.read_ue()? as u8;
-            bit_depth_chroma_minus8 = r.read_ue()? as u8;
+            let bdl = r.read_ue()?;
+            let bdc = r.read_ue()?;
+            if bdl > 6 || bdc > 6 {
+                return Err(BitstreamError::InvalidSyntax(format!(
+                    "bit_depth_minus8 {bdl}/{bdc} exceeds 6"
+                )));
+            }
+            bit_depth_luma_minus8 = bdl as u8;
+            bit_depth_chroma_minus8 = bdc as u8;
             qpprime_y_zero_transform_bypass_flag = r.read_bit()?;
 
             let seq_scaling_matrix_present_flag = r.read_bit()?;
@@ -111,7 +163,17 @@ impl Sps {
         }
 
         let log2_max_frame_num_minus4 = r.read_ue()?;
+        if log2_max_frame_num_minus4 > 12 {
+            return Err(BitstreamError::InvalidSyntax(format!(
+                "log2_max_frame_num_minus4 {log2_max_frame_num_minus4} exceeds 12"
+            )));
+        }
         let pic_order_cnt_type = r.read_ue()?;
+        if pic_order_cnt_type > 2 {
+            return Err(BitstreamError::InvalidSyntax(format!(
+                "pic_order_cnt_type {pic_order_cnt_type} exceeds 2"
+            )));
+        }
         let mut log2_max_pic_order_cnt_lsb_minus4 = 0;
         let mut delta_pic_order_always_zero_flag = false;
         let mut offset_for_non_ref_pic = 0;
@@ -120,21 +182,44 @@ impl Sps {
         let mut offset_for_ref_frame = Vec::new();
 
         if pic_order_cnt_type == 0 {
-            log2_max_pic_order_cnt_lsb_minus4 = r.read_ue()?;
+            let v = r.read_ue()?;
+            if v > 12 {
+                return Err(BitstreamError::InvalidSyntax(format!(
+                    "log2_max_pic_order_cnt_lsb_minus4 {v} exceeds 12"
+                )));
+            }
+            log2_max_pic_order_cnt_lsb_minus4 = v;
         } else if pic_order_cnt_type == 1 {
             delta_pic_order_always_zero_flag = r.read_bit()?;
             offset_for_non_ref_pic = r.read_se()?;
             offset_for_top_to_bottom_field = r.read_se()?;
-            num_ref_frames_in_pic_order_cnt_cycle = r.read_ue()?;
+            let n = r.read_ue()?;
+            // Cap to prevent OOM on malicious ue==4G (previously unbounded loop).
+            if n > 255 {
+                return Err(BitstreamError::InvalidSyntax(format!(
+                    "num_ref_frames_in_pic_order_cnt_cycle {n} exceeds 255"
+                )));
+            }
+            num_ref_frames_in_pic_order_cnt_cycle = n;
             for _ in 0..num_ref_frames_in_pic_order_cnt_cycle {
                 offset_for_ref_frame.push(r.read_se()?);
             }
         }
 
         let max_num_ref_frames = r.read_ue()?;
+        if max_num_ref_frames > 16 {
+            return Err(BitstreamError::InvalidSyntax(format!(
+                "max_num_ref_frames {max_num_ref_frames} exceeds 16"
+            )));
+        }
         let gaps_in_frame_num_value_allowed_flag = r.read_bit()?;
         let pic_width_in_mbs_minus1 = r.read_ue()?;
         let pic_height_in_map_units_minus1 = r.read_ue()?;
+        if pic_width_in_mbs_minus1 > 2000 || pic_height_in_map_units_minus1 > 2000 {
+            return Err(BitstreamError::InvalidSyntax(format!(
+                "SPS dimensions {pic_width_in_mbs_minus1}x{pic_height_in_map_units_minus1} exceed sane limits"
+            )));
+        }
         let frame_mbs_only_flag = r.read_bit()?;
         let mb_adaptive_frame_field_flag = if !frame_mbs_only_flag {
             r.read_bit()?
@@ -151,6 +236,14 @@ impl Sps {
                 top: r.read_ue()?,
                 bottom: r.read_ue()?,
             })
+        } else {
+            None
+        };
+
+        // VUI parameters (Annex E). Optional trailing syntax; parse when present.
+        let vui_parameters_present_flag = r.read_bit().unwrap_or(false);
+        let vui = if vui_parameters_present_flag {
+            Some(parse_vui(&mut r)?)
         } else {
             None
         };
@@ -186,7 +279,18 @@ impl Sps {
             mb_adaptive_frame_field_flag,
             direct_8x8_inference_flag,
             frame_cropping,
+            vui,
         })
+    }
+
+    /// Frame rate from VUI timing info, if present.
+    pub fn fps(&self) -> Option<f64> {
+        let v = self.vui.as_ref()?;
+        if v.timing_info_present && v.num_units_in_tick > 0 {
+            Some(v.time_scale as f64 / (2.0 * v.num_units_in_tick as f64))
+        } else {
+            None
+        }
     }
 
     /// Macroblock-aligned coded width in pixels: `(pic_width_in_mbs_minus1 + 1) * 16`.
@@ -253,6 +357,120 @@ fn skip_scaling_list(r: &mut BitReader, size: usize) -> Result<(), BitstreamErro
     Ok(())
 }
 
+fn parse_vui(r: &mut BitReader) -> Result<VuiParameters, BitstreamError> {
+    let aspect_ratio_info_present = r.read_bit()?;
+    let (aspect_ratio_idc, sar_width, sar_height) = if aspect_ratio_info_present {
+        let idc = r.read_bits(8)? as u8;
+        if idc == 255 {
+            (idc, r.read_bits(16)?, r.read_bits(16)?)
+        } else {
+            (idc, 0, 0)
+        }
+    } else {
+        (0, 0, 0)
+    };
+    let overscan_info_present = r.read_bit()?;
+    let overscan_appropriate = if overscan_info_present {
+        r.read_bit()?
+    } else {
+        false
+    };
+    let video_signal_type_present = r.read_bit()?;
+    let (
+        video_format,
+        video_full_range,
+        colour_description_present,
+        colour_primaries,
+        transfer_characteristics,
+        matrix_coefficients,
+    ) = if video_signal_type_present {
+        let vf = r.read_bits(3)? as u8;
+        let vfr = r.read_bit()?;
+        let cdp = r.read_bit()?;
+        if cdp {
+            (
+                vf,
+                vfr,
+                true,
+                r.read_bits(8)? as u8,
+                r.read_bits(8)? as u8,
+                r.read_bits(8)? as u8,
+            )
+        } else {
+            (vf, vfr, false, 0, 0, 0)
+        }
+    } else {
+        (0, false, false, 0, 0, 0)
+    };
+    let chroma_loc_info_present = r.read_bit()?;
+    if chroma_loc_info_present {
+        let _ = r.read_ue()?;
+        let _ = r.read_ue()?;
+    }
+    let timing_info_present = r.read_bit()?;
+    let (num_units_in_tick, time_scale, fixed_frame_rate) = if timing_info_present {
+        let n = r.read_bits(32)?;
+        let t = r.read_bits(32)?;
+        let f = r.read_bit()?;
+        if n == 0 || t == 0 {
+            return Err(BitstreamError::InvalidSyntax(
+                "VUI timing num_units_in_tick/time_scale must be non-zero".into(),
+            ));
+        }
+        (n, t, f)
+    } else {
+        (0, 0, false)
+    };
+    for _ in 0..2 {
+        let hrd_present = r.read_bit().unwrap_or(false);
+        if hrd_present {
+            let cpb_cnt = r.read_ue().unwrap_or(0).min(31);
+            let _ = r.read_bits(4);
+            let _ = r.read_bits(4);
+            for _ in 0..=cpb_cnt {
+                let _ = r.read_ue();
+                let _ = r.read_ue();
+                let _ = r.read_bit();
+            }
+            let _ = r.read_bits(5);
+            let _ = r.read_bits(5);
+            let _ = r.read_bits(5);
+            let _ = r.read_bits(5);
+            let _ = r.read_bits(5);
+        }
+    }
+    if r.read_bit().unwrap_or(false) {
+        let _ = r.read_bit();
+        let _ = r.read_ue();
+        let _ = r.read_ue();
+        let _ = r.read_ue();
+        let _ = r.read_ue();
+        let _ = r.read_ue();
+        let _ = r.read_ue();
+    }
+    Ok(VuiParameters {
+        aspect_ratio_info_present,
+        aspect_ratio_idc,
+        sar_width,
+        sar_height,
+        overscan_info_present,
+        overscan_appropriate,
+        video_signal_type_present,
+        video_format,
+        video_full_range,
+        colour_description_present,
+        colour_primaries,
+        transfer_characteristics,
+        matrix_coefficients,
+        chroma_loc_info_present,
+        timing_info_present,
+        num_units_in_tick,
+        time_scale,
+        fixed_frame_rate,
+        hrd_parameters_present: false,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -316,6 +534,7 @@ mod tests {
             mb_adaptive_frame_field_flag: false,
             direct_8x8_inference_flag: true,
             frame_cropping: None,
+            vui: None,
         };
 
         assert_eq!(sps.coded_width(), 3840);

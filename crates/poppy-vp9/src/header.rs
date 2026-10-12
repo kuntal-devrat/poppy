@@ -15,7 +15,8 @@ pub enum Vp9FrameType {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Vp9SegmentFeature {
     pub alt_q_enabled: bool,
-    pub alt_q_val: i8,
+    /// Alt-Q offset in the range -255..=255 (needs i16; previously i8 truncated 255 to -1).
+    pub alt_q_val: i16,
 
     pub alt_lf_enabled: bool,
     pub alt_lf_val: i8,
@@ -165,6 +166,7 @@ impl Vp9FrameHeader {
                 return Err(Vp9ParserError::ReservedBitMismatch(res));
             }
         }
+        // profile is 2 bits so >3 is unreachable, but keep explicit guard.
         if profile > 3 {
             return Err(Vp9ParserError::InvalidProfile(profile));
         }
@@ -328,7 +330,12 @@ impl Vp9FrameHeader {
                     ref_frame_sign_bias[i] = r.read_bit()?;
                 }
 
-                // Dimensions with refs
+                // Dimensions with refs: per VP9 spec §6.2, when found_ref==1
+                // no explicit dimensions are sent — they are inherited from
+                // the referenced frame. Previously fell through to
+                // read_bits(16) consuming render-flag bits as width.
+                // Now requires valid ref_dims; otherwise returns error instead
+                // of mis-parsing.
                 let mut found_ref = false;
                 let mut ref_w = 0;
                 let mut ref_h = 0;
@@ -346,8 +353,15 @@ impl Vp9FrameHeader {
                     }
                 }
 
-                let (w, h) = if found_ref && ref_w > 0 && ref_h > 0 {
-                    (ref_w, ref_h)
+                let (w, h) = if found_ref {
+                    if ref_w > 0 && ref_h > 0 {
+                        (ref_w, ref_h)
+                    } else {
+                        return Err(Vp9ParserError::UnexpectedEof {
+                            needed_bits: 32,
+                            available_bits: r.bits_remaining(),
+                        });
+                    }
                 } else {
                     (r.read_bits(16)? + 1, r.read_bits(16)? + 1)
                 };
@@ -454,12 +468,13 @@ impl Vp9FrameHeader {
             if segmentation.update_data {
                 segmentation.abs_or_delta_update = r.read_bit()?;
                 for i in 0..8 {
-                    // Feature 0: alt_q (8 bits signed)
+                    // Feature 0: alt_q (8 bits magnitude + sign = -255..255, needs i16)
                     if r.read_bit()? {
                         segmentation.features[i].alt_q_enabled = true;
-                        let mag = r.read_bits(8)? as i32;
+                        let mag = r.read_bits(8)? as i16;
                         let sign = r.read_bit()?;
-                        segmentation.features[i].alt_q_val = if sign { -mag } else { mag } as i8;
+                        let v = if sign { -mag } else { mag };
+                        segmentation.features[i].alt_q_val = v;
                     }
                     // Feature 1: alt_lf (6 bits signed)
                     if r.read_bit()? {
@@ -576,7 +591,10 @@ impl Vp9FrameHeader {
             if profile == 1 || profile == 3 {
                 *subsampling_x = r.read_bits(1)? as u8;
                 *subsampling_y = r.read_bits(1)? as u8;
-                let _ = r.read_bits(1)?; // reserved
+                let reserved = r.read_bits(1)?;
+                if reserved != 0 {
+                    return Err(Vp9ParserError::ReservedBitMismatch(reserved));
+                }
             } else {
                 *subsampling_x = 1;
                 *subsampling_y = 1;
@@ -586,7 +604,10 @@ impl Vp9FrameHeader {
             if profile == 1 || profile == 3 {
                 *subsampling_x = 0;
                 *subsampling_y = 0;
-                let _ = r.read_bits(1)?; // reserved
+                let reserved = r.read_bits(1)?;
+                if reserved != 0 {
+                    return Err(Vp9ParserError::ReservedBitMismatch(reserved));
+                }
             }
         }
 

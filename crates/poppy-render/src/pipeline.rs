@@ -43,8 +43,8 @@ impl ColorSpace {
 struct ColorParamsUniform {
     color_matrix: u32,
     color_range: u32,
+    tone_map: u32,
     _padding0: u32,
-    _padding1: u32,
 }
 
 /// Hardware render pipeline for YUV to sRGB conversion.
@@ -119,7 +119,7 @@ impl VideoRenderPipeline {
             push_constant_ranges: &[],
         });
 
-        let create_pipeline = |label: &'static str| {
+        let create_pipeline = |label: &'static str, entry: &'static str| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&pipeline_layout),
@@ -131,7 +131,7 @@ impl VideoRenderPipeline {
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &shader_module,
-                    entry_point: Some("fs_main"),
+                    entry_point: Some(entry),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: output_format,
                         blend: Some(wgpu::BlendState::REPLACE),
@@ -155,8 +155,8 @@ impl VideoRenderPipeline {
             })
         };
 
-        let pipeline_nv12 = create_pipeline("poppy_nv12_pipeline");
-        let pipeline_p010 = create_pipeline("poppy_p010_pipeline");
+        let pipeline_nv12 = create_pipeline("poppy_nv12_pipeline", "fs_nv12");
+        let pipeline_p010 = create_pipeline("poppy_p010_pipeline", "fs_p010");
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("poppy_video_sampler"),
@@ -268,11 +268,16 @@ impl GpuRenderer {
 
     /// Update the shader uniform buffer with the given color space.
     fn update_uniform(&self, color_space: ColorSpace) {
+        // HDR tone-map when BT.2020 limited (PQ) is used; SDR otherwise.
+        let tone_map = match color_space {
+            ColorSpace::Bt2020Limited | ColorSpace::Bt2020Full => 1,
+            _ => 0,
+        };
         let params = ColorParamsUniform {
             color_matrix: color_space.matrix_index(),
             color_range: if color_space.is_full_range() { 1 } else { 0 },
+            tone_map,
             _padding0: 0,
-            _padding1: 0,
         };
         self.queue.write_buffer(
             &self.pipeline.uniform_buffer,
@@ -321,6 +326,40 @@ impl GpuRenderer {
         target_view: &wgpu::TextureView,
         viewport: Option<(f32, f32, f32, f32)>,
     ) -> Result<(), RenderError> {
+        if width == 0 || height == 0 {
+            return Err(RenderError::UnsupportedFormat("zero dimensions".into()));
+        }
+        // Stride must cover visible width; otherwise write_texture would read OOB.
+        if stride_y < width {
+            return Err(RenderError::UnsupportedFormat(format!(
+                "stride_y {stride_y} < width {width}"
+            )));
+        }
+        if stride_uv < width.div_ceil(2) {
+            return Err(RenderError::UnsupportedFormat(format!(
+                "stride_uv {stride_uv} < uv width {}",
+                width.div_ceil(2)
+            )));
+        }
+        // Validate plane sizes against strides (tight or pitched).
+        let need_y = (stride_y as usize).saturating_mul(height as usize);
+        let need_uv = (stride_uv as usize).saturating_mul(height.div_ceil(2) as usize);
+        if y_plane.len() < need_y {
+            return Err(RenderError::UnsupportedFormat(format!(
+                "Y plane {} < stride {}x{} ({need_y})",
+                y_plane.len(),
+                stride_y,
+                height
+            )));
+        }
+        if uv_plane.len() < need_uv {
+            return Err(RenderError::UnsupportedFormat(format!(
+                "UV plane {} < stride {}x{} ({need_uv})",
+                uv_plane.len(),
+                stride_uv,
+                height.div_ceil(2)
+            )));
+        }
         self.update_uniform(color_space);
 
         let uv_width = width.div_ceil(2);
@@ -542,6 +581,30 @@ impl GpuRenderer {
         target_view: &wgpu::TextureView,
         viewport: Option<(f32, f32, f32, f32)>,
     ) -> Result<(), RenderError> {
+        if width == 0 || height == 0 {
+            return Err(RenderError::UnsupportedFormat("zero dimensions".into()));
+        }
+        if stride_y < width {
+            return Err(RenderError::UnsupportedFormat(format!(
+                "P010 stride_y {stride_y} < width {width}"
+            )));
+        }
+        if stride_uv < width.div_ceil(2) {
+            return Err(RenderError::UnsupportedFormat(format!(
+                "P010 stride_uv {stride_uv} < uv width {}",
+                width.div_ceil(2)
+            )));
+        }
+        // y_plane/uv_plane are u16 slices; stride is in pixels (not bytes).
+        let need_y = (stride_y as usize).saturating_mul(height as usize);
+        let need_uv = (stride_uv as usize).saturating_mul(height.div_ceil(2) as usize);
+        if y_plane.len() < need_y || uv_plane.len() < need_uv {
+            return Err(RenderError::UnsupportedFormat(format!(
+                "P010 planes too small: y {}<{need_y} uv {}<{need_uv}",
+                y_plane.len(),
+                uv_plane.len()
+            )));
+        }
         if !self
             .device
             .features()

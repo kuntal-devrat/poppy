@@ -22,6 +22,57 @@ pub struct DpbState {
     pub render_heights: [u32; 8],
 }
 
+impl DpbState {
+    /// Update DPB from a decoded frame header per AV1 §5.9.2 refresh_frame_flags.
+    /// Slots with refresh bit set are overwritten with current frame dims/hints.
+    pub fn update_from_frame(&mut self, fh: &FrameHeader) {
+        for i in 0..8 {
+            if (fh.refresh_frame_flags & (1 << i)) != 0 {
+                self.order_hints[i] = fh.order_hint as u32;
+                self.widths[i] = fh.frame_width;
+                self.heights[i] = fh.frame_height;
+                self.render_widths[i] = fh.render_width;
+                self.render_heights[i] = fh.render_height;
+            }
+        }
+    }
+}
+
+/// Film grain parameters (AV1 §5.9.30). Previously parsed-and-discarded;
+/// now stored for VA-API `VAFilmGrainStructAV1` mapping.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct FilmGrainParams {
+    pub apply_grain: bool,
+    pub grain_seed: u16,
+    pub update_grain: bool,
+    pub film_grain_params_ref_idx: u8,
+    pub num_y_points: u8,
+    pub point_y_value: Vec<u8>,
+    pub point_y_scaling: Vec<u8>,
+    pub chroma_scaling_from_luma: bool,
+    pub num_cb_points: u8,
+    pub point_cb_value: Vec<u8>,
+    pub point_cb_scaling: Vec<u8>,
+    pub num_cr_points: u8,
+    pub point_cr_value: Vec<u8>,
+    pub point_cr_scaling: Vec<u8>,
+    pub grain_scaling_minus_8: u8,
+    pub ar_coeff_lag: u8,
+    pub ar_coeffs_y: Vec<u8>,
+    pub ar_coeffs_cb: Vec<u8>,
+    pub ar_coeffs_cr: Vec<u8>,
+    pub ar_coeff_shift_minus_6: u8,
+    pub grain_scale_shift: u8,
+    pub cb_mult: u8,
+    pub cb_luma_mult: u8,
+    pub cb_offset: u16,
+    pub cr_mult: u8,
+    pub cr_luma_mult: u8,
+    pub cr_offset: u16,
+    pub overlap_flag: bool,
+    pub clip_to_restricted_range: bool,
+}
+
 /// Parsed AV1 Frame Header parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FrameHeader {
@@ -99,11 +150,14 @@ pub struct FrameHeader {
     pub tile_cols: u8,
     pub tile_rows: u8,
     pub context_update_tile_id: u16,
-    pub width_in_sbs_minus_1: [u16; 63],
-    pub height_in_sbs_minus_1: [u16; 63],
+    pub width_in_sbs_minus_1: [u16; 64],
+    pub height_in_sbs_minus_1: [u16; 64],
     pub gm_params: [[i32; 6]; 7],
     pub gm_type: [u8; 7],
+    /// Per-slot identity flag (1 = non-global/identity transform, 0 = global).
+    /// Named `gm_invalid` for libva compat (`invalid` in VA-API means identity).
     pub gm_invalid: [u8; 7],
+    pub film_grain: FilmGrainParams,
     pub tile_data_offset: usize,
 }
 
@@ -429,8 +483,8 @@ impl FrameHeader {
         let min_log2_tiles = min_log2_tile_cols.max(tile_log2(max_tile_area_sb, sb_rows * sb_cols));
 
         let uniform_tile_spacing_flag = r.read_bit()?;
-        let mut width_in_sbs_minus_1 = [0u16; 63];
-        let mut height_in_sbs_minus_1 = [0u16; 63];
+        let mut width_in_sbs_minus_1 = [0u16; 64];
+        let mut height_in_sbs_minus_1 = [0u16; 64];
         let tile_cols_log2;
         let tile_rows_log2;
         let tile_cols;
@@ -451,7 +505,7 @@ impl FrameHeader {
             let mut start_sb = 0;
             while start_sb < sb_cols {
                 let size = tile_width_sb.min(sb_cols - start_sb);
-                if i < 63 {
+                if i < 64 {
                     width_in_sbs_minus_1[i] = (size - 1) as u16;
                 }
                 start_sb += tile_width_sb;
@@ -474,7 +528,7 @@ impl FrameHeader {
             let mut start_sb = 0;
             while start_sb < sb_rows {
                 let size = tile_height_sb.min(sb_rows - start_sb);
-                if j < 63 {
+                if j < 64 {
                     height_in_sbs_minus_1[j] = (size - 1) as u16;
                 }
                 start_sb += tile_height_sb;
@@ -485,7 +539,7 @@ impl FrameHeader {
             let mut widest_tile_sb = 0;
             let mut start_sb = 0;
             let mut i = 0;
-            while start_sb < sb_cols && i < 63 {
+            while start_sb < sb_cols && i < 64 {
                 let max_w = (sb_cols - start_sb).min(max_tile_width_sb);
                 let size_sb = r.read_ns(max_w)? + 1;
                 width_in_sbs_minus_1[i] = (size_sb - 1) as u16;
@@ -504,7 +558,7 @@ impl FrameHeader {
             let max_tile_height_sb = (max_tile_area_sb_non_uniform / widest_tile_sb.max(1)).max(1);
             let mut start_sb = 0;
             let mut j = 0;
-            while start_sb < sb_rows && j < 63 {
+            while start_sb < sb_rows && j < 64 {
                 let max_h = (sb_rows - start_sb).min(max_tile_height_sb);
                 let size_sb = r.read_ns(max_h)? + 1;
                 height_in_sbs_minus_1[j] = (size_sb - 1) as u16;
@@ -515,7 +569,13 @@ impl FrameHeader {
             tile_rows_log2 = tile_log2(1, tile_rows as u32);
         }
 
-        let context_update_tile_id = if tile_cols_log2 > 0 || tile_rows_log2 > 0 {
+        // large_scale_tile (AV1 §5.9.8): present when TileCols*TileRows > 1.
+        // Spec order is large_scale_tile BEFORE context_update_tile_id.
+        let tile_count = (tile_cols as u32).saturating_mul(tile_rows as u32);
+        let large_scale_tile = if tile_count > 1 { r.read_bit()? } else { false };
+        let context_update_tile_id = if large_scale_tile {
+            0
+        } else if tile_cols_log2 > 0 || tile_rows_log2 > 0 {
             let id = r.read_bits((tile_rows_log2 + tile_cols_log2) as usize)? as u16;
             let _tile_size_bytes_minus_1 = r.read_bits(2)?;
             id
@@ -865,29 +925,34 @@ impl FrameHeader {
             }
         }
 
-        // Film grain parameters (§5.9.25 / §5.9.30)
+        // Film grain parameters (§5.9.25 / §5.9.30) — stored for VA-API mapping.
+        let mut film_grain = FilmGrainParams::default();
         if seq.film_grain_params_present && (show_frame || showable_frame) {
             let apply_grain = r.read_bit()?;
+            film_grain.apply_grain = apply_grain;
             if apply_grain {
-                let _grain_seed = r.read_bits(16)?;
+                film_grain.grain_seed = r.read_bits(16)? as u16;
                 let update_grain = if frame_type == Av1FrameType::InterFrame {
                     r.read_bit()?
                 } else {
                     true
                 };
+                film_grain.update_grain = update_grain;
                 if !update_grain {
-                    let _film_grain_params_ref_idx = r.read_bits(3)?;
+                    film_grain.film_grain_params_ref_idx = r.read_bits(3)? as u8;
                 } else {
                     let num_y_points = r.read_bits(4)? as usize;
+                    film_grain.num_y_points = num_y_points as u8;
                     for _ in 0..num_y_points {
-                        let _ = r.read_bits(8)?;
-                        let _ = r.read_bits(8)?;
+                        film_grain.point_y_value.push(r.read_bits(8)? as u8);
+                        film_grain.point_y_scaling.push(r.read_bits(8)? as u8);
                     }
                     let chroma_scaling_from_luma = if seq.mono_chrome {
                         false
                     } else {
                         r.read_bit()?
                     };
+                    film_grain.chroma_scaling_from_luma = chroma_scaling_from_luma;
                     let (num_cb_points, num_cr_points) = if seq.mono_chrome
                         || chroma_scaling_from_luma
                         || (seq.subsampling_x && seq.subsampling_y && num_y_points == 0)
@@ -896,16 +961,19 @@ impl FrameHeader {
                     } else {
                         (r.read_bits(4)? as usize, r.read_bits(4)? as usize)
                     };
+                    film_grain.num_cb_points = num_cb_points as u8;
+                    film_grain.num_cr_points = num_cr_points as u8;
                     for _ in 0..num_cb_points {
-                        let _ = r.read_bits(8)?;
-                        let _ = r.read_bits(8)?;
+                        film_grain.point_cb_value.push(r.read_bits(8)? as u8);
+                        film_grain.point_cb_scaling.push(r.read_bits(8)? as u8);
                     }
                     for _ in 0..num_cr_points {
-                        let _ = r.read_bits(8)?;
-                        let _ = r.read_bits(8)?;
+                        film_grain.point_cr_value.push(r.read_bits(8)? as u8);
+                        film_grain.point_cr_scaling.push(r.read_bits(8)? as u8);
                     }
-                    let _grain_scaling_minus_8 = r.read_bits(2)?;
+                    film_grain.grain_scaling_minus_8 = r.read_bits(2)? as u8;
                     let ar_coeff_lag = r.read_bits(2)? as usize;
+                    film_grain.ar_coeff_lag = ar_coeff_lag as u8;
                     let num_pos_luma = 2 * ar_coeff_lag * (ar_coeff_lag + 1);
                     let num_pos_chroma = if num_cb_points > 0 || num_cr_points > 0 {
                         num_pos_luma + 1
@@ -914,33 +982,33 @@ impl FrameHeader {
                     };
                     if num_y_points > 0 {
                         for _ in 0..num_pos_luma {
-                            let _ = r.read_bits(8)?;
+                            film_grain.ar_coeffs_y.push(r.read_bits(8)? as u8);
                         }
                     }
                     if chroma_scaling_from_luma || num_cb_points > 0 {
                         for _ in 0..num_pos_chroma {
-                            let _ = r.read_bits(8)?;
+                            film_grain.ar_coeffs_cb.push(r.read_bits(8)? as u8);
                         }
                     }
                     if chroma_scaling_from_luma || num_cr_points > 0 {
                         for _ in 0..num_pos_chroma {
-                            let _ = r.read_bits(8)?;
+                            film_grain.ar_coeffs_cr.push(r.read_bits(8)? as u8);
                         }
                     }
-                    let _ar_coeff_shift_minus_6 = r.read_bits(2)?;
-                    let _grain_scale_shift = r.read_bits(2)?;
+                    film_grain.ar_coeff_shift_minus_6 = r.read_bits(2)? as u8;
+                    film_grain.grain_scale_shift = r.read_bits(2)? as u8;
                     if num_cb_points > 0 {
-                        let _cb_mult = r.read_bits(8)?;
-                        let _cb_luma_mult = r.read_bits(8)?;
-                        let _cb_offset = r.read_bits(9)?;
+                        film_grain.cb_mult = r.read_bits(8)? as u8;
+                        film_grain.cb_luma_mult = r.read_bits(8)? as u8;
+                        film_grain.cb_offset = r.read_bits(9)? as u16;
                     }
                     if num_cr_points > 0 {
-                        let _cr_mult = r.read_bits(8)?;
-                        let _cr_luma_mult = r.read_bits(8)?;
-                        let _cr_offset = r.read_bits(9)?;
+                        film_grain.cr_mult = r.read_bits(8)? as u8;
+                        film_grain.cr_luma_mult = r.read_bits(8)? as u8;
+                        film_grain.cr_offset = r.read_bits(9)? as u16;
                     }
-                    let _overlap_flag = r.read_bit()?;
-                    let _clip_to_restricted_range = r.read_bit()?;
+                    film_grain.overlap_flag = r.read_bit()?;
+                    film_grain.clip_to_restricted_range = r.read_bit()?;
                 }
             }
         }
@@ -972,7 +1040,7 @@ impl FrameHeader {
             disable_frame_end_update_cdf,
             uniform_tile_spacing_flag,
             allow_warped_motion,
-            large_scale_tile: false,
+            large_scale_tile,
             order_hint,
             primary_ref_frame,
             refresh_frame_flags,
@@ -1028,6 +1096,7 @@ impl FrameHeader {
             gm_params,
             gm_type,
             gm_invalid,
+            film_grain,
             tile_data_offset,
         })
     }
@@ -1108,11 +1177,12 @@ impl FrameHeader {
             tile_cols: 1,
             tile_rows: 1,
             context_update_tile_id: 0,
-            width_in_sbs_minus_1: [0; 63],
-            height_in_sbs_minus_1: [0; 63],
+            width_in_sbs_minus_1: [0; 64],
+            height_in_sbs_minus_1: [0; 64],
             gm_params: [[0; 6]; 7],
             gm_type: [0; 7],
             gm_invalid: [0; 7],
+            film_grain: FilmGrainParams::default(),
             tile_data_offset: 0,
         }
     }
@@ -1128,9 +1198,18 @@ fn read_delta_q(r: &mut BitReader) -> Result<i8, BitstreamError> {
 }
 
 fn tile_log2(blk_size: u32, target: u32) -> u32 {
-    let mut k = 0;
-    while (blk_size << k) < target {
+    // Guard against blk_size==0 or huge target causing infinite loop/overflow.
+    if blk_size == 0 || target <= 1 {
+        return 0;
+    }
+    let mut k = 0u32;
+    let mut cur = blk_size;
+    while cur < target {
+        cur = cur.saturating_mul(2);
         k += 1;
+        if k > 32 || cur == 0 {
+            break;
+        }
     }
     k
 }
@@ -1222,11 +1301,44 @@ fn set_frame_refs(
         r
     };
 
-    // Remaining references: LAST2 (1), LAST3 (2), BWDREF (4), ALTREF2 (5), ALTREF (6)
+    // Remaining references: LAST2 (1), LAST3 (2), BWDREF (4), ALTREF2 (5), ALTREF (6).
+    // Fix: slots 0 (LAST) and 3 (GOLDEN) are preassigned; unset slots are 0 which
+    // collides with LAST==0. Track explicitly which slots were assigned.
+    let mut assigned = [false; 7];
+    assigned[0] = true;
+    assigned[3] = true;
+    // Slots filled via backward search above are assigned.
+    // Re-derive: any slot whose frame is marked used AND (slot==0/3 or ref differs from 0) is assigned.
+    // Simpler: mark 4/5/6 as assigned if their frame is used and differs from initial 0 unless 0 is genuinely used.
+    // We know 6,4,5 were just set if used_frame contains them; mark them.
+    for (slot_idx, &frame) in ref_frame_idx.iter().enumerate() {
+        if used_frame[frame as usize]
+            && (slot_idx == 0 || slot_idx == 3 || frame != 0 || used_frame[0] && slot_idx != 0)
+        {
+            // Conservative: slots 0/3 always assigned; others assigned if their frame is used
+            // and not a duplicate of an unassigned zero.
+            assigned[slot_idx] = true;
+        }
+    }
+    // Clear false positives: slots 1,2,4,5,6 that still hold 0 but 0 is used by LAST should be unassigned.
+    for slot in [1usize, 2, 4, 5, 6] {
+        if ref_frame_idx[slot] == 0 && !(slot == 0) {
+            // If frame 0 is used by LAST (slot 0), a zero here is a duplicate -> unassigned.
+            if ref_frame_idx[0] == 0 {
+                assigned[slot] = false;
+            }
+        }
+    }
     let ref_list = [1, 2, 4, 5, 6];
     for &slot in &ref_list {
-        #[allow(clippy::collapsible_if)]
-        if !used_frame[ref_frame_idx[slot] as usize] {
+        if !assigned[slot] {
+            if let Some(rf) = find_latest_forward(&used_frame) {
+                ref_frame_idx[slot] = rf as u8;
+                used_frame[rf] = true;
+                assigned[slot] = true;
+            }
+        } else if !used_frame[ref_frame_idx[slot] as usize] {
+            // Assigned slot whose frame got evicted (should not happen) -> refill.
             if let Some(rf) = find_latest_forward(&used_frame) {
                 ref_frame_idx[slot] = rf as u8;
                 used_frame[rf] = true;
@@ -1234,7 +1346,7 @@ fn set_frame_refs(
         }
     }
 
-    // Earliest forward for any remaining unassigned
+    // Earliest forward for any remaining unassigned (genuinely >=8 or still unassigned).
     let mut earliest_ref = 0;
     let mut earliest_order_hint = i32::MAX;
     for (i, &hint) in shifted_order_hints.iter().enumerate() {
@@ -1243,8 +1355,8 @@ fn set_frame_refs(
             earliest_order_hint = hint;
         }
     }
-    for slot in &mut ref_frame_idx {
-        if *slot >= 8 {
+    for (idx, slot) in ref_frame_idx.iter_mut().enumerate() {
+        if *slot >= 8 || !assigned[idx] {
             *slot = earliest_ref as u8;
         }
     }
@@ -1373,21 +1485,33 @@ fn inverse_recenter(r: u32, v: u32) -> u32 {
 }
 
 fn decode_subexp(r: &mut BitReader, num_syms: u32) -> Result<u32, BitstreamError> {
-    let mut i = 0;
-    let mut mk = 0;
-    let k = 3;
+    let mut i = 0u32;
+    let mut mk = 0u32;
+    let k = 3u32;
     loop {
+        // b2 grows with i; cap to avoid 1<<b2 overflow on malicious streams
+        // that keep returning read_bit()==1.
         let b2 = if i == 0 { k } else { k + i - 1 };
-        let a = 1 << b2;
-        if num_syms <= mk + 3 * a {
-            let subexp_final_bits = r.read_ns(num_syms - mk)?;
-            return Ok(subexp_final_bits + mk);
+        if b2 >= 31 {
+            return Err(BitstreamError::InvalidSyntax(
+                "subexp b2 overflow (malicious stream)",
+            ));
+        }
+        let a = 1u32 << b2;
+        // checked math for mk + 3*a overflow.
+        let limit = mk.saturating_add(3u32.saturating_mul(a));
+        if num_syms <= limit {
+            let subexp_final_bits = r.read_ns(num_syms.saturating_sub(mk))?;
+            return Ok(subexp_final_bits.saturating_add(mk));
         } else if r.read_bit()? {
-            i += 1;
-            mk += a;
+            i = i.saturating_add(1);
+            if i > 32 {
+                return Err(BitstreamError::InvalidSyntax("subexp loop overflow"));
+            }
+            mk = mk.saturating_add(a);
         } else {
             let subexp_bits = r.read_bits(b2 as usize)?;
-            return Ok(subexp_bits + mk);
+            return Ok(subexp_bits.saturating_add(mk));
         }
     }
 }

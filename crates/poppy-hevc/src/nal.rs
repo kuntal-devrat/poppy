@@ -139,15 +139,46 @@ impl HevcNalType {
     }
 
     /// Returns `true` if this is a VCL (Video Coding Layer) slice NAL unit.
+    /// Excludes reserved types 22-23 and 41-47 which are not VCL slices.
     #[inline]
     pub fn is_vcl(&self) -> bool {
-        self.as_u8() <= 31
+        matches!(
+            self,
+            Self::TrailN
+                | Self::TrailR
+                | Self::TsaN
+                | Self::TsaR
+                | Self::StsaN
+                | Self::StsaR
+                | Self::RadlN
+                | Self::RadlR
+                | Self::RaslN
+                | Self::RaslR
+                | Self::BlaWLp
+                | Self::BlaWRadl
+                | Self::BlaNLp
+                | Self::IdrWRadl
+                | Self::IdrNLp
+                | Self::CraNut
+        ) || (matches!(self, Self::Other(v) if (10..=15).contains(v) || (24..=31).contains(v)))
     }
 
     /// Returns `true` if this is an IRAP (Intra Random Access Point - Keyframe) NAL unit.
+    /// Only 16..=21 are IRAP; 22-23 are reserved and must not be treated as IRAP.
     #[inline]
     pub fn is_irap(&self) -> bool {
-        (16..=23).contains(&self.as_u8())
+        (16..=21).contains(&self.as_u8())
+    }
+
+    /// Returns `true` if this NAL unit can be used as a reference picture.
+    /// `_N` (non-reference) variants 0,2,4,6,8 are non-reference; all other
+    /// VCL types (including IRAP) are reference.
+    #[inline]
+    pub fn is_reference(&self) -> bool {
+        !matches!(
+            self,
+            Self::TrailN | Self::TsaN | Self::StsaN | Self::RadlN | Self::RaslN
+        )
     }
 
     /// Returns `true` if this is an IDR (Instantaneous Decoder Refresh) picture.

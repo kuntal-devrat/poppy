@@ -30,27 +30,95 @@ pub struct TimeBase {
 }
 
 impl TimeBase {
-    /// Create a new timebase. Panics if `den` is zero.
+    /// Create a new timebase. Panics if `den` is zero (kept for const contexts).
     pub const fn new(num: u32, den: u32) -> Self {
         assert!(den != 0, "TimeBase denominator must not be zero");
         Self { num, den }
     }
 
+    /// Checked constructor returning an error instead of panicking.
+    pub fn try_new(num: u32, den: u32) -> Result<Self, crate::CoreError> {
+        if den == 0 {
+            return Err(crate::CoreError::TimestampOverflow {
+                context: "TimeBase denominator must not be zero".into(),
+            });
+        }
+        Ok(Self { num, den })
+    }
+
     /// Convert a raw timestamp in this timebase to fractional seconds.
+    /// Returns 0.0 for corrupt zero denominators instead of inf/nan.
     pub fn to_seconds(self, ts: i64) -> f64 {
+        if self.den == 0 {
+            return 0.0;
+        }
         (ts as f64) * (self.num as f64) / (self.den as f64)
     }
 
+    /// Integer-exact rescale of `ts` from `self` to `dst` (FFmpeg `av_rescale_q`
+    /// semantics): `(ts * self.num * dst.den) / (self.den * dst.num)` with
+    /// rounding-to-nearest and saturation to `i64`.
+    pub fn rescale(self, ts: i64, dst: TimeBase) -> i64 {
+        if self.num == 0 || dst.num == 0 || self.den == 0 || dst.den == 0 {
+            return 0;
+        }
+        let num = ts as i128 * self.num as i128 * dst.den as i128;
+        let den = self.den as i128 * dst.num as i128;
+        // Round to nearest, ties away from zero.
+        let rounded = if num >= 0 {
+            (num + den / 2) / den
+        } else {
+            (num - den / 2) / den
+        };
+        rounded.clamp(i64::MIN as i128, i64::MAX as i128) as i64
+    }
+
+    /// Compare two timestamps in potentially different timebases without
+    /// floating point: returns Ordering of `a in self` vs `b in other`.
+    pub fn compare(self, a: i64, other: TimeBase, b: i64) -> std::cmp::Ordering {
+        if self.den == 0 || other.den == 0 || self.num == 0 || other.num == 0 {
+            return a.cmp(&b);
+        }
+        let lhs = a as i128 * self.num as i128 * other.den as i128;
+        let rhs = b as i128 * other.num as i128 * self.den as i128;
+        lhs.cmp(&rhs)
+    }
+
     /// Convert a raw timestamp in this timebase to whole microseconds.
+    /// Saturates to `i64::MIN/MAX` instead of wrapping on overflow.
     pub fn to_micros(self, ts: i64) -> i64 {
         // Use i128 intermediate to avoid overflow for large timestamps
+        if self.den == 0 {
+            return 0;
+        }
         let micros = (ts as i128) * (self.num as i128) * 1_000_000 / (self.den as i128);
-        micros as i64
+        micros.clamp(i64::MIN as i128, i64::MAX as i128) as i64
+    }
+
+    /// Checked variant returning an error on overflow.
+    pub fn try_to_micros(self, ts: i64) -> Result<i64, crate::CoreError> {
+        if self.den == 0 {
+            return Err(crate::CoreError::TimestampOverflow {
+                context: "TimeBase denominator is zero".into(),
+            });
+        }
+        let micros = (ts as i128) * (self.num as i128) * 1_000_000 / (self.den as i128);
+        if micros < i64::MIN as i128 || micros > i64::MAX as i128 {
+            return Err(crate::CoreError::TimestampOverflow {
+                context: format!("timestamp {ts} overflows microseconds"),
+            });
+        }
+        Ok(micros as i64)
     }
 
     /// Convert a duration in seconds to a timestamp in this timebase.
+    /// Non-finite inputs map to 0; overflow saturates to `i64::MAX/MIN`.
     pub fn from_seconds(self, seconds: f64) -> i64 {
-        (seconds * (self.den as f64) / (self.num as f64)).round() as i64
+        if !seconds.is_finite() || self.num == 0 || self.den == 0 {
+            return 0;
+        }
+        let v = (seconds * (self.den as f64) / (self.num as f64)).round();
+        v.clamp(i64::MIN as f64, i64::MAX as f64) as i64
     }
 }
 
@@ -155,7 +223,7 @@ impl StreamInfo {
     pub fn is_audio(&self) -> bool {
         matches!(
             self.codec,
-            CodecId::Aac | CodecId::Opus | CodecId::Mp3 | CodecId::Flac
+            CodecId::Aac | CodecId::Opus | CodecId::Mp3 | CodecId::Flac | CodecId::Vorbis
         )
     }
 }

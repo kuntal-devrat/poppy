@@ -5,6 +5,8 @@ on:
     branches: [ master, main ]
   pull_request:
     branches: [ master, main ]
+  schedule:
+    - cron: '0 4 * * 1' # weekly fuzz/audit
 
 env:
   CARGO_TERM_COLOR: always
@@ -51,6 +53,19 @@ jobs:
 
       - name: Run Test Suite
         run: cargo test --workspace -- --test-threads=1
+
+      - name: Fuzz smoke (60s per target, panic-only)
+        run: |
+          cargo install cargo-fuzz --locked || true
+          for t in fuzz_isobmff fuzz_ebml fuzz_h264_parse fuzz_hevc_parse fuzz_av1_parse fuzz_bsf; do
+            timeout 70 cargo fuzz run $t -- -max_total_time=60 -max_len=4096 || exit 1
+          done
+        working-directory: fuzz
+
+      - name: Security audit
+        run: |
+          cargo install cargo-audit --locked || true
+          cargo audit --deny warnings || true
 
   test-crossplatform:
     name: Build & Test (${{ matrix.os }})

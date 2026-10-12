@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.6.0] - 2026-10-12
+
+### Added
+- **Full MPEG-2 Transport Stream (MPEG-TS) Demuxer**:
+  - Auto-detection of 188-byte (standard), 192-byte (M2TS BDAV), and 204-byte (FEC) packet cadence.
+  - Full PAT (Program Association Table) and PMT (Program Map Table) parsing to identify elementary video/audio streams.
+  - Multi-packet Packetized Elementary Stream (PES) reassembly across TS packets with continuity counter monitoring.
+  - 33-bit rollover-aware PTS/DTS timestamp parsing (90 kHz timebase).
+  - Fast keyframe seeking via adaptation field random access indicators and NAL unit IDR inspection.
+  - Seamless container dispatch in `MediaStream::open` for `.ts`, `.mts`, and `.m2ts` files.
+- **Real macOS VideoToolbox Hardware Decoder**:
+  - Dynamic `dlopen` loading of CoreMedia, VideoToolbox, and CoreVideo frameworks with zero static C build dependencies.
+  - Creation of real `VTDecompressionSession` from parameter sets (`avcC` / `hvcC`).
+  - Submission of `CMSampleBuffer`s and asynchronous frame extraction into decoded `CVPixelBuffer`s with zero-copy Metal `IOSurface` descriptors.
+- **Real Windows Direct3D 12 Video Decoder**:
+  - Dynamic COM runtime loading of `D3D12CreateDevice` and query for `ID3D12VideoDevice`.
+  - Multi-slice picture batching with DXVA picture parameter assembly (`DXVA_PicParams_H264`) and Texture2D surface pools.
+  - Zero-copy DXGI shared handle export (`ID3D12Device::CreateSharedHandle`).
+- **Dynamic Software Decode Fallback**:
+  - Integrated OpenH264 dynamic loading backend with automatic runtime resolution.
+  - I420 to NV12 software color plane packaging for direct `wgpu` rendering.
+  - Added `software_fallback(bool)` option to `MediaStreamBuilder` for headless CI and GPU-less environments.
+- **Full Audio C ABI**:
+  - Added `poppy_has_audio`, `poppy_audio_get_config`, `poppy_read_audio_frame`, and `poppy_audio_frame_get_samples` to `include/poppy.h` and `libpoppy`.
+  - Thread-safe multi-threaded concurrent access tests in `test_c_abi.rs`.
+- **Edit List (`elst` / `edts`) Gapless Mapping**:
+  - Full ISO/IEC 14496-12 edit list parser with dwell edit detection, initial sample offset trimming, and gapless audio playback.
+- **Vorbis Audio Support**:
+  - Enabled Vorbis decoding across `poppy-core`, `poppy-demux`, and `poppy-audio` (Symphonia backend).
+- **Comprehensive Integration Tests & Property Tests**:
+  - fMP4 / DASH fragment parsing tests (`test_fmp4_demux.rs`).
+  - Matroska / WebM integration tests (`test_mkv_demux.rs`).
+  - MPEG-TS integration tests (`test_mpegts_demux.rs`).
+  - Software fallback tests (`test_software_fallback.rs`).
+  - A/V sync verification tests (`test_av_sync.rs`).
+  - Full doc-tests across all 10 workspace crates.
+
+### Optimized
+- **Zero-Copy Memory-Mapped Packet Extraction**: Wrapped mmap buffers in `Bytes::from_owner` to eliminate heap copies during demuxing.
+- **O(log N) Binary Search Track Synchronization**: Replaced linear O(N) sample scanning on multi-track seeks with binary search DTS synchronization.
+
+### Fixed
+- **BUG-1**: Fixed proptest facade compilation error on integer bounds assertion.
+- **BUG-2 & BUG-3**: Checked `libc::dup()` return codes in `DmaBufDescriptor::clone()` and `DmaBufImage::try_from()`, adding `try_clone()` to prevent silent fd table exhaustion errors.
+- **BUG-5**: Propagated SPS/PPS parameter set submission errors in pipeline initialization instead of silently swallowing errors.
+- **BUG-6**: Rejected `sample_rate == 0` configs instead of silently setting 1 Hz.
+- **BUG-7**: Implemented real frame duration estimation in `estimate_frame_duration_seconds()` for accurate backward stepping.
+- **Safety**: Added `#![deny(unsafe_op_in_unsafe_fn)]` across hardware and render crates.
+
+---
+
 ## [0.5.5] - 2026-10-12
 
 ### Fixed

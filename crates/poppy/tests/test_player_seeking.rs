@@ -58,3 +58,82 @@ fn test_media_stream_seeking_and_timing() {
         );
     }
 }
+
+#[test]
+fn test_seek_edge_cases_non_finite_and_negative() {
+    let sample_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("tests/samples/test_h264.mp4");
+
+    if !sample_path.exists() {
+        return;
+    }
+
+    let mut stream = poppy::open(&sample_path).expect("open video file");
+
+    // 1. Non-finite values must return Err(PoppyError::InvalidSeek)
+    let err_nan = stream.seek_seconds(f64::NAN);
+    assert!(err_nan.is_err(), "NaN seek must return Err");
+    match err_nan.unwrap_err() {
+        poppy::PoppyError::InvalidSeek(msg) => assert!(msg.contains("non-finite")),
+        other => panic!("Expected InvalidSeek, got {other:?}"),
+    }
+
+    let err_inf = stream.seek_seconds(f64::INFINITY);
+    assert!(err_inf.is_err(), "+Infinity seek must return Err");
+
+    let err_neginf = stream.seek_seconds(f64::NEG_INFINITY);
+    assert!(err_neginf.is_err(), "-Infinity seek must return Err");
+
+    // 2. Negative timestamps: clamped gracefully to 0 or keyframe at 0
+    let res_neg = stream.seek_seconds(-10.0);
+    assert!(res_neg.is_ok(), "Negative seek should succeed (clamp to start)");
+
+    // 3. Seek past EOF: succeeds by finding the nearest keyframe at or before target
+    let res_eof = stream.seek_seconds(999_999.0);
+    assert!(res_eof.is_ok(), "Seek past EOF must succeed");
+    if stream.has_hardware_decoder() {
+        let frame_after_eof = stream.next_frame().expect("next_frame after EOF");
+        assert!(frame_after_eof.is_some(), "Seek past EOF yields the nearest keyframe");
+    }
+
+    // 4. Seek back to 0 after EOF: stream recovers and yields frames again
+    stream.seek_seconds(0.0).expect("seek back to 0 after EOF");
+    if stream.has_hardware_decoder() {
+        let frame_after_rewind = stream.next_frame().expect("next_frame after rewind");
+        assert!(frame_after_rewind.is_some(), "Stream must recover after seeking back to 0");
+    }
+}
+
+#[test]
+fn test_seek_edge_cases_webm() {
+    let sample_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("tests/samples/test_av_opus.webm");
+
+    if !sample_path.exists() {
+        return;
+    }
+
+    let mut stream = poppy::open(&sample_path).expect("open webm file");
+
+    // Non-finite seeks rejected
+    assert!(stream.seek_seconds(f64::NAN).is_err());
+    assert!(stream.seek_seconds(f64::INFINITY).is_err());
+
+    // Seek to 0
+    assert!(stream.seek_seconds(0.0).is_ok());
+
+    // Seek to past EOF
+    assert!(stream.seek_seconds(1000.0).is_ok());
+
+    // Seek back to 0
+    assert!(stream.seek_seconds(0.0).is_ok());
+}
+

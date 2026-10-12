@@ -10,6 +10,19 @@
 //! - Slice Segment Header parsing (§7.3.6.1)
 //! - Profile, Tier, and Level parsing (§7.3.7.3)
 //! - 8-bit and 10-bit HDR format detection and crop rectangle resolution
+//!
+//! ## Example
+//!
+//! ```
+//! use poppy_hevc::{HevcNalHeader, HevcNalType};
+//!
+//! // VPS NAL unit header: type = 32 (VpsNut), layer_id = 0, temporal_id_plus1 = 1
+//! let header_bytes = [0x40, 0x01];
+//! let header = HevcNalHeader::parse(&header_bytes).expect("valid HEVC NAL header");
+//! assert_eq!(header.nal_unit_type, HevcNalType::VpsNut);
+//! assert_eq!(header.nuh_layer_id, 0);
+//! assert_eq!(header.nuh_temporal_id_plus1, 1);
+//! ```
 
 pub mod bitstream;
 pub mod nal;

@@ -184,8 +184,9 @@ impl VaapiAv1Decoder {
         pic_param.cdef_bits = fh.cdef_bits;
         pic_param.cdef_y_strengths = fh.cdef_y_strengths;
         pic_param.cdef_uv_strengths = fh.cdef_uv_strengths;
-        pic_param.width_in_sbs_minus_1 = fh.width_in_sbs_minus_1;
-        pic_param.height_in_sbs_minus_1 = fh.height_in_sbs_minus_1;
+        // FrameHeader tracks 64 tiles; VA-API FFI holds 63 (libva compat). Truncate 64th (rare 64-tile 8K) rather than failing.
+        pic_param.width_in_sbs_minus_1[..63].copy_from_slice(&fh.width_in_sbs_minus_1[..63]);
+        pic_param.height_in_sbs_minus_1[..63].copy_from_slice(&fh.height_in_sbs_minus_1[..63]);
         pic_param.ref_deltas = fh.ref_deltas;
         pic_param.mode_deltas = fh.mode_deltas;
 
@@ -387,6 +388,62 @@ impl VaapiAv1Decoder {
             pic_param.wm[i].wmmat[7] = 0;
         }
 
+        // Film grain mapping to VAFilmGrainStructAV1 (previously discarded).
+        {
+            let g = &fh.film_grain;
+            let mut fields: u32 = 0;
+            if g.apply_grain {
+                fields |= 1 << 0;
+            }
+            if g.overlap_flag {
+                fields |= 1 << 1;
+            }
+            if g.clip_to_restricted_range {
+                fields |= 1 << 2;
+            }
+            if g.chroma_scaling_from_luma {
+                fields |= 1 << 3;
+            }
+            pic_param.film_grain_info.film_grain_info_fields = fields;
+            pic_param.film_grain_info.grain_seed = g.grain_seed;
+            pic_param.film_grain_info.num_y_points = g.num_y_points.min(14);
+            for i in 0..(g.num_y_points.min(14) as usize) {
+                pic_param.film_grain_info.point_y_value[i] = *g.point_y_value.get(i).unwrap_or(&0);
+                pic_param.film_grain_info.point_y_scaling[i] =
+                    *g.point_y_scaling.get(i).unwrap_or(&0);
+            }
+            pic_param.film_grain_info.num_cb_points = g.num_cb_points.min(10);
+            pic_param.film_grain_info.num_cr_points = g.num_cr_points.min(10);
+            for i in 0..(g.num_cb_points.min(10) as usize) {
+                pic_param.film_grain_info.point_cb_value[i] =
+                    *g.point_cb_value.get(i).unwrap_or(&0);
+                pic_param.film_grain_info.point_cb_scaling[i] =
+                    *g.point_cb_scaling.get(i).unwrap_or(&0);
+            }
+            for i in 0..(g.num_cr_points.min(10) as usize) {
+                pic_param.film_grain_info.point_cr_value[i] =
+                    *g.point_cr_value.get(i).unwrap_or(&0);
+                pic_param.film_grain_info.point_cr_scaling[i] =
+                    *g.point_cr_scaling.get(i).unwrap_or(&0);
+            }
+            // AR coefficients are i8 in FFI; our stored u8 values are bit patterns.
+            for i in 0..g.ar_coeffs_y.len().min(24) {
+                pic_param.film_grain_info.ar_coeffs_y[i] = g.ar_coeffs_y[i] as i8;
+            }
+            for i in 0..g.ar_coeffs_cb.len().min(25) {
+                pic_param.film_grain_info.ar_coeffs_cb[i] = g.ar_coeffs_cb[i] as i8;
+            }
+            for i in 0..g.ar_coeffs_cr.len().min(25) {
+                pic_param.film_grain_info.ar_coeffs_cr[i] = g.ar_coeffs_cr[i] as i8;
+            }
+            pic_param.film_grain_info.cb_mult = g.cb_mult;
+            pic_param.film_grain_info.cb_luma_mult = g.cb_luma_mult;
+            pic_param.film_grain_info.cb_offset = g.cb_offset;
+            pic_param.film_grain_info.cr_mult = g.cr_mult;
+            pic_param.film_grain_info.cr_luma_mult = g.cr_luma_mult;
+            pic_param.film_grain_info.cr_offset = g.cr_offset;
+        }
+
         // Build VASliceParameterBufferAV1
         let mut slice_param = VASliceParameterBufferAV1 {
             slice_data_size: tile_data.len() as u32,
@@ -494,14 +551,14 @@ impl VaapiAv1Decoder {
 
             let mut sync_status = (va.vaSyncSurface)(dpy, target_surface);
             let mut retries = 0;
-            while sync_status == 34 && retries < 1000 {
+            while sync_status == crate::vaapi::ffi::VA_STATUS_ERROR_HW_BUSY && retries < 1000 {
                 std::thread::sleep(std::time::Duration::from_millis(1));
                 sync_status = (va.vaSyncSurface)(dpy, target_surface);
                 retries += 1;
             }
             if sync_status != VA_STATUS_SUCCESS {
                 let err_msg = va.err_str(sync_status);
-                if err_msg.contains("decoding error") {
+                if sync_status == crate::vaapi::ffi::VA_STATUS_ERROR_DECODING_ERROR {
                     is_concealed = true;
                     eprintln!("VA-API AV1 warning: {} (error concealment active)", err_msg);
                 } else {
@@ -513,15 +570,12 @@ impl VaapiAv1Decoder {
             }
         }
 
-        // Update reference frame slots and DPB state
+        // Update reference frame slots and DPB state via centralized helper
+        // (refresh_frame_flags semantics per AV1 §5.9.2).
+        self.dpb_state.update_from_frame(fh);
         for i in 0..8 {
             if (fh.refresh_frame_flags & (1 << i)) != 0 {
                 self.dpb_slots[i] = target_surface;
-                self.dpb_state.order_hints[i] = fh.order_hint as u32;
-                self.dpb_state.widths[i] = fh.frame_width;
-                self.dpb_state.heights[i] = fh.frame_height;
-                self.dpb_state.render_widths[i] = fh.render_width;
-                self.dpb_state.render_heights[i] = fh.render_height;
             }
         }
 
@@ -530,10 +584,14 @@ impl VaapiAv1Decoder {
                 .pool
                 .as_ref()
                 .and_then(|p| p.export_dmabuf_descriptor(target_surface).ok());
-            let data = self.pool.as_ref().and_then(|p| {
-                p.read_surface_data(target_surface, fh.frame_width, fh.frame_height)
-                    .ok()
-            });
+            let data = if dmabuf.is_none() {
+                self.pool.as_ref().and_then(|p| {
+                    p.read_surface_data(target_surface, fh.frame_width, fh.frame_height)
+                        .ok()
+                })
+            } else {
+                None
+            }; // lazy zero-copy
             self.output_queue.push_back(DecodedFrame {
                 pts,
                 width: fh.frame_width,
@@ -582,16 +640,28 @@ impl HwDecoder for VaapiAv1Decoder {
                             let idx = fh.frame_to_show_map_idx as usize;
                             if idx < 8 && self.dpb_slots[idx] != VA_INVALID_ID {
                                 let surf_id = self.dpb_slots[idx];
-                                let width = fh.frame_width.max(seq.max_frame_width);
-                                let height = fh.frame_height.max(seq.max_frame_height);
+                                // Use frame dims, not max (previously max() reported oversized metadata).
+                                let width = if fh.frame_width > 0 {
+                                    fh.frame_width
+                                } else {
+                                    seq.max_frame_width
+                                };
+                                let height = if fh.frame_height > 0 {
+                                    fh.frame_height
+                                } else {
+                                    seq.max_frame_height
+                                };
                                 let dmabuf = self
                                     .pool
                                     .as_ref()
                                     .and_then(|p| p.export_dmabuf_descriptor(surf_id).ok());
-                                let data = self
-                                    .pool
-                                    .as_ref()
-                                    .and_then(|p| p.read_surface_data(surf_id, width, height).ok());
+                                let data = if dmabuf.is_none() {
+                                    self.pool.as_ref().and_then(|p| {
+                                        p.read_surface_data(surf_id, width, height).ok()
+                                    })
+                                } else {
+                                    None
+                                }; // lazy zero-copy
                                 self.output_queue.push_back(DecodedFrame {
                                     pts: packet.pts.or(Some(packet.dts)),
                                     width,

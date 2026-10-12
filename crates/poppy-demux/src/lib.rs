@@ -8,14 +8,27 @@
 //!
 //! Both parsers are designed for zero-copy operation over memory-mapped files
 //! or streaming byte sources.
+//!
+//! ```
+//! use poppy_demux::bsf::avcc_to_annex_b;
+//!
+//! // Convert AVCC 4-byte length-prefixed NAL unit to Annex-B start codes
+//! let avcc_data = [0x00, 0x00, 0x00, 0x02, 0x67, 0x42];
+//! let mut annex_b = Vec::new();
+//! avcc_to_annex_b(&avcc_data, 4, None, &mut annex_b).unwrap();
+//! assert_eq!(&annex_b[..4], &[0x00, 0x00, 0x00, 0x01]);
+//! assert_eq!(&annex_b[4..], &[0x67, 0x42]);
+//! ```
 
 pub mod bsf;
 pub mod ebml;
 pub mod isobmff;
+pub mod mpegts;
 
 pub use bsf::{avcc_to_annex_b, hevc_to_annex_b};
 pub use ebml::MatroskaDemuxer;
 pub use isobmff::Mp4Demuxer;
+pub use mpegts::MpegTsDemuxer;
 
 use poppy_core::{Packet, StreamInfo};
 
@@ -56,4 +69,10 @@ pub trait Demuxer: Send {
     ///
     /// `timestamp` is in units of the specified stream's timebase.
     fn seek_to_keyframe(&mut self, stream_index: usize, timestamp: i64) -> Result<(), DemuxError>;
+
+    /// Returns the estimated or average frame duration in seconds for the given stream, if known.
+    fn estimated_frame_duration_seconds(&self, stream_index: usize) -> Option<f64> {
+        let _ = stream_index;
+        None
+    }
 }

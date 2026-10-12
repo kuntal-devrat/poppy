@@ -1,6 +1,17 @@
 //! Pure Rust bitstream parser for VP9 video uncompressed frame headers and superframes.
 //!
 //! Provides zero-copy parsing of VP9 bitstreams conforming strictly to the VP9 specification.
+//!
+//! ## Example
+//!
+//! ```
+//! use poppy_vp9::parse_superframe_frames;
+//!
+//! let packet = [0x01, 0x02, 0x03];
+//! let frames = parse_superframe_frames(&packet).expect("valid packet parsing");
+//! assert_eq!(frames.len(), 1);
+//! assert_eq!(frames[0], &packet[..]);
+//! ```
 
 pub mod bitstream;
 pub mod header;

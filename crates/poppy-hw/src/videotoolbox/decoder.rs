@@ -1,93 +1,89 @@
-//! macOS VideoToolbox (`VTDecompressionSession`) HAL decoder backend.
+//! macOS VideoToolbox (`VTDecompressionSession`) real hardware decoder backend.
 //!
-//! Implements multi-slice packaging, error recovery, and zero-copy CVPixelBuffer / IOSurface export.
+//! Uses `dlopen`-loaded CoreMedia/VideoToolbox/CoreVideo APIs to create a real
+//! `VTDecompressionSession`, submit compressed NAL units via `CMSampleBuffer`,
+//! receive decoded `CVPixelBuffer` frames, and export `IOSurface` descriptors
+//! for zero-copy GPU import.
+//!
+//! The asynchronous decode callback appends frames to a thread-safe queue that
+//! `receive_frame()` drains in PTS order.
 
 use super::ffi::*;
 use crate::{CvPixelBufferDescriptor, DecodedFrame, HwDecoder, HwError};
-use bytes::Bytes;
-use poppy_core::{CodecId, InterlaceMode, Packet, PixelFormat};
-use poppy_h264::nal::{NalHeader, NalUnitType, find_annex_b_nals};
-use poppy_h264::pps::Pps;
-use poppy_h264::slice_header::SliceHeader;
-use poppy_h264::sps::Sps;
-use poppy_hevc::sps::SequenceParameterSet;
-use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use poppy_core::{CodecId, InterlaceMode, PixelFormat, Packet};
+use std::collections::VecDeque;
+use std::ffi::c_void;
+use std::ptr;
+use std::sync::{Arc, Mutex};
 
-static BUFFER_PTR_COUNTER: AtomicUsize = AtomicUsize::new(0x2000);
+/// Shared output queue written by the async VT callback and read by the
+/// decoder's `receive_frame()`.
+struct OutputQueue {
+    frames: VecDeque<DecodedFrame>,
+}
 
-/// VideoToolbox hardware decoder session for macOS.
+/// Real VideoToolbox hardware decoder session.
+///
+/// # macOS only
+///
+/// On non-macOS platforms `VideoToolboxDecoder::new()` returns
+/// `HwError::NoDeviceFound` because the underlying framework dylibs
+/// are not available.
 pub struct VideoToolboxDecoder {
     pub codec: CodecId,
+    session: VTDecompressionSessionRef,
+    format_desc: CMVideoFormatDescriptionRef,
+    funcs: &'static VtFunctions,
+    output_queue: Arc<Mutex<OutputQueue>>,
     pub width: u32,
     pub height: u32,
     pub is_10bit: bool,
-    pub output_queue: VecDeque<DecodedFrame>,
-
-    // Parameter sets
-    pub h264_sps: HashMap<u32, Sps>,
-    pub h264_pps: HashMap<u32, Pps>,
-    pub active_h264_sps: Option<u32>,
-    pub active_h264_pps: Option<u32>,
-
-    pub hevc_sps: HashMap<u32, SequenceParameterSet>,
-    pub active_hevc_sps: Option<u32>,
 }
 
+// SAFETY: VTDecompressionSession is documented as session-thread-safe in Apple docs.
+// The output queue is behind a Mutex<>. We only move the decoder between threads
+// (Send); we never share references (Sync not implemented).
+unsafe impl Send for VideoToolboxDecoder {}
+
 impl VideoToolboxDecoder {
+    /// Create a new VideoToolbox decoder for the given codec.
+    ///
+    /// This loads the VT/CM/CV frameworks via `dlopen` (one-time init),
+    /// but does NOT create the `VTDecompressionSession` until parameter sets
+    /// are available (see `set_extradata` / first packet with inline SPS/PPS).
     pub fn new(codec: CodecId) -> Result<Self, HwError> {
-        if codec != CodecId::H264 && codec != CodecId::Hevc && codec != CodecId::Vp9 {
+        if !matches!(codec, CodecId::H264 | CodecId::Hevc) {
             return Err(HwError::UnsupportedCodec);
         }
+
+        let funcs = VtFunctions::load().ok_or(HwError::NoDeviceFound)?;
+
         Ok(Self {
             codec,
+            session: ptr::null_mut(),
+            format_desc: ptr::null_mut(),
+            funcs,
+            output_queue: Arc::new(Mutex::new(OutputQueue {
+                frames: VecDeque::new(),
+            })),
             width: 0,
             height: 0,
             is_10bit: false,
-            output_queue: VecDeque::new(),
-            h264_sps: HashMap::new(),
-            h264_pps: HashMap::new(),
-            active_h264_sps: None,
-            active_h264_pps: None,
-            hevc_sps: HashMap::new(),
-            active_hevc_sps: None,
         })
     }
 
+    /// Provide out-of-band codec extradata (avcC / hvcC) to create the
+    /// `CMVideoFormatDescription` and `VTDecompressionSession`.
     pub fn set_extradata(&mut self, extradata: &[u8]) -> Result<(), HwError> {
         match self.codec {
             CodecId::H264 => {
                 if let Ok(record) = poppy_core::codec::AvcCRecord::parse(extradata) {
-                    for s in &record.sps_list {
-                        if let Ok(sps) = Sps::parse(s) {
-                            let id = sps.seq_parameter_set_id;
-                            self.width = sps.display_width();
-                            self.height = sps.display_height();
-                            self.h264_sps.insert(id, sps);
-                            self.active_h264_sps = Some(id);
-                        }
-                    }
-                    for p in &record.pps_list {
-                        if let Ok(pps) = Pps::parse(p) {
-                            let id = pps.pic_parameter_set_id;
-                            self.h264_pps.insert(id, pps);
-                            self.active_h264_pps = Some(id);
-                        }
-                    }
+                    self.create_h264_session(&record)?;
                 }
             }
             CodecId::Hevc => {
                 if let Ok(record) = poppy_core::codec::HvcCRecord::parse(extradata) {
-                    for s in &record.sps_list {
-                        if let Ok(sps) = SequenceParameterSet::parse(s) {
-                            let id = sps.sps_seq_parameter_set_id;
-                            self.width = sps.cropped_width();
-                            self.height = sps.cropped_height();
-                            self.is_10bit = sps.is_10bit();
-                            self.hevc_sps.insert(id, sps);
-                            self.active_hevc_sps = Some(id);
-                        }
-                    }
+                    self.create_hevc_session(&record)?;
                 }
             }
             _ => {}
@@ -95,250 +91,525 @@ impl VideoToolboxDecoder {
         Ok(())
     }
 
-    pub fn set_parameter_sets(
+    // ------------------------------------------------------------------
+    // Session creation
+    // ------------------------------------------------------------------
+
+    fn create_h264_session(
         &mut self,
-        sps_list: &[Bytes],
-        pps_list: &[Bytes],
+        record: &poppy_core::codec::AvcCRecord,
     ) -> Result<(), HwError> {
-        for s in sps_list {
-            if let Ok(sps) = Sps::parse(s) {
-                let id = sps.seq_parameter_set_id;
+        // Parse SPS to get dimensions
+        for sps_bytes in &record.sps_list {
+            if let Ok(sps) = poppy_h264::sps::Sps::parse(sps_bytes) {
                 self.width = sps.display_width();
                 self.height = sps.display_height();
-                self.h264_sps.insert(id, sps);
-                self.active_h264_sps = Some(id);
             }
         }
-        for p in pps_list {
-            if let Ok(pps) = Pps::parse(p) {
-                let id = pps.pic_parameter_set_id;
-                self.h264_pps.insert(id, pps);
-                self.active_h264_pps = Some(id);
-            }
+
+        if self.width == 0 || self.height == 0 {
+            return Err(HwError::DeviceInitFailed(
+                "H.264 SPS contains zero width/height".into(),
+            ));
         }
+
+        // Collect all parameter sets (SPS + PPS)
+        let mut param_ptrs: Vec<*const u8> = Vec::new();
+        let mut param_sizes: Vec<usize> = Vec::new();
+        for sps in &record.sps_list {
+            param_ptrs.push(sps.as_ptr());
+            param_sizes.push(sps.len());
+        }
+        for pps in &record.pps_list {
+            param_ptrs.push(pps.as_ptr());
+            param_sizes.push(pps.len());
+        }
+
+        let nal_length = record.nal_length_size as i32;
+        let mut format_desc: CMVideoFormatDescriptionRef = ptr::null_mut();
+
+        let status = unsafe {
+            (self.funcs.cm_video_format_description_create_from_h264_parameter_sets)(
+                ptr::null(),           // kCFAllocatorDefault
+                param_ptrs.len(),
+                param_ptrs.as_ptr(),
+                param_sizes.as_ptr(),
+                nal_length,
+                &mut format_desc,
+            )
+        };
+
+        if status != NO_ERR || format_desc.is_null() {
+            return Err(HwError::DeviceInitFailed(format!(
+                "CMVideoFormatDescriptionCreateFromH264ParameterSets failed: OSStatus {status}"
+            )));
+        }
+
+        self.format_desc = format_desc;
+        self.create_session()?;
         Ok(())
     }
 
-    fn decode_h264_packet(&mut self, packet: &Packet) -> Result<(), HwError> {
-        let nals = if packet.data.starts_with(&[0, 0, 0, 1]) || packet.data.starts_with(&[0, 0, 1])
-        {
-            find_annex_b_nals(&packet.data)
-        } else {
-            let mut list = Vec::new();
-            let mut cursor = 0;
-            let d = &packet.data;
-            while cursor + 4 <= d.len() {
-                let len =
-                    u32::from_be_bytes([d[cursor], d[cursor + 1], d[cursor + 2], d[cursor + 3]])
-                        as usize;
-                cursor += 4;
-                if cursor + len <= d.len() {
-                    list.push(&d[cursor..cursor + len]);
-                    cursor += len;
-                } else {
-                    break;
-                }
+    fn create_hevc_session(
+        &mut self,
+        record: &poppy_core::codec::HvcCRecord,
+    ) -> Result<(), HwError> {
+        // Parse SPS to get dimensions
+        for sps_bytes in &record.sps_list {
+            if let Ok(sps) = poppy_hevc::sps::SequenceParameterSet::parse(sps_bytes) {
+                self.width = sps.cropped_width();
+                self.height = sps.cropped_height();
+                self.is_10bit = sps.is_10bit();
             }
-            list
+        }
+
+        if self.width == 0 || self.height == 0 {
+            return Err(HwError::DeviceInitFailed(
+                "HEVC SPS contains zero width/height".into(),
+            ));
+        }
+
+        // Collect VPS + SPS + PPS
+        let mut param_ptrs: Vec<*const u8> = Vec::new();
+        let mut param_sizes: Vec<usize> = Vec::new();
+        for vps in &record.vps_list {
+            param_ptrs.push(vps.as_ptr());
+            param_sizes.push(vps.len());
+        }
+        for sps in &record.sps_list {
+            param_ptrs.push(sps.as_ptr());
+            param_sizes.push(sps.len());
+        }
+        for pps in &record.pps_list {
+            param_ptrs.push(pps.as_ptr());
+            param_sizes.push(pps.len());
+        }
+
+        let nal_length = record.nal_length_size as i32;
+        let mut format_desc: CMVideoFormatDescriptionRef = ptr::null_mut();
+
+        let status = unsafe {
+            (self.funcs.cm_video_format_description_create_from_hevc_parameter_sets)(
+                ptr::null(),           // kCFAllocatorDefault
+                param_ptrs.len(),
+                param_ptrs.as_ptr(),
+                param_sizes.as_ptr(),
+                nal_length,
+                ptr::null(),           // extensions
+                &mut format_desc,
+            )
         };
 
-        let mut slice_nals = Vec::new();
-        for nal in nals {
-            if nal.is_empty() {
-                continue;
-            }
-            let header = NalHeader::parse(nal[0]);
-            match header.unit_type {
-                NalUnitType::Sps => {
-                    if let Ok(sps) = Sps::parse(nal) {
-                        let id = sps.seq_parameter_set_id;
-                        self.width = sps.display_width();
-                        self.height = sps.display_height();
-                        self.h264_sps.insert(id, sps);
-                        self.active_h264_sps = Some(id);
-                    }
-                }
-                NalUnitType::Pps => {
-                    if let Ok(pps) = Pps::parse(nal) {
-                        let id = pps.pic_parameter_set_id;
-                        self.h264_pps.insert(id, pps);
-                        self.active_h264_pps = Some(id);
-                    }
-                }
-                NalUnitType::SliceIdr | NalUnitType::SliceNonIdr => {
-                    let sps = match self.active_h264_sps.and_then(|id| self.h264_sps.get(&id)) {
-                        Some(s) => s,
-                        None => continue,
-                    };
-                    let pps = match self.active_h264_pps.and_then(|id| self.h264_pps.get(&id)) {
-                        Some(p) => p,
-                        None => continue,
-                    };
-                    let slice_payload = &nal[1..];
-                    match SliceHeader::parse(
-                        header.unit_type,
-                        header.nal_ref_idc,
-                        slice_payload,
-                        sps,
-                        pps,
-                    ) {
-                        Ok(slice) => slice_nals.push((nal, header, slice)),
-                        Err(e) => {
-                            eprintln!(
-                                "VideoToolbox H.264 slice parse warning: {e} (error concealment active)"
-                            );
-                        }
-                    }
-                }
-                _ => {}
-            }
+        if status != NO_ERR || format_desc.is_null() {
+            return Err(HwError::DeviceInitFailed(format!(
+                "CMVideoFormatDescriptionCreateFromHEVCParameterSets failed: OSStatus {status}"
+            )));
         }
 
-        if slice_nals.is_empty() {
-            return Ok(());
-        }
-
-        // Multi-slice batching: group slices belonging to the same picture
-        let mut picture_batches: Vec<Vec<(&[u8], NalHeader, SliceHeader)>> = Vec::new();
-        for item in slice_nals {
-            let is_new_picture = match picture_batches.last() {
-                None => true,
-                Some(current_batch) => {
-                    let (_, prev_header, prev_slice) = &current_batch[0];
-                    item.2.first_mb_in_slice == 0
-                        || item.2.frame_num != prev_slice.frame_num
-                        || item.2.pic_order_cnt_lsb != prev_slice.pic_order_cnt_lsb
-                        || item.2.field_pic_flag != prev_slice.field_pic_flag
-                        || item.2.bottom_field_flag != prev_slice.bottom_field_flag
-                        || item.1.unit_type.is_idr() != prev_header.unit_type.is_idr()
-                }
-            };
-            if is_new_picture {
-                picture_batches.push(vec![item]);
-            } else {
-                picture_batches.last_mut().unwrap().push(item);
-            }
-        }
-
-        for slices in picture_batches {
-            let sps = match self.active_h264_sps.and_then(|id| self.h264_sps.get(&id)) {
-                Some(s) => s,
-                None => continue,
-            };
-
-            let (_first_nal, first_header, first_slice) = &slices[0];
-
-            // Detect interlaced format
-            let interlace_mode = if sps.frame_mbs_only_flag {
-                InterlaceMode::Progressive
-            } else if first_slice.field_pic_flag {
-                if first_slice.bottom_field_flag {
-                    InterlaceMode::BottomField
-                } else {
-                    InterlaceMode::TopField
-                }
-            } else if sps.mb_adaptive_frame_field_flag {
-                InterlaceMode::TopFieldFirst
-            } else {
-                InterlaceMode::Progressive
-            };
-
-            let ptr_base = BUFFER_PTR_COUNTER.fetch_add(0x1000, Ordering::Relaxed);
-            let cv_pixel_buffer = Some(CvPixelBufferDescriptor {
-                pixel_buffer_ptr: ptr_base,
-                io_surface_ptr: ptr_base + 0x100,
-                width: sps.display_width(),
-                height: sps.display_height(),
-                pixel_format_type: K_CV_PIXEL_FORMAT_TYPE_420_YP_CB_CR8_BI_PLANAR_VIDEO_RANGE,
-            });
-
-            self.output_queue.push_back(DecodedFrame {
-                pts: packet.pts.or(Some(packet.dts)),
-                width: sps.display_width(),
-                height: sps.display_height(),
-                pixel_format: PixelFormat::Nv12,
-                surface_id: (ptr_base & 0xFFFF) as u32,
-                data: None,
-                interlace_mode,
-                dmabuf: None,
-                dxgi_handle: None,
-                cv_pixel_buffer,
-                is_concealed: first_header.nal_ref_idc > 0 && false,
-            });
-        }
-
+        self.format_desc = format_desc;
+        self.create_session()?;
         Ok(())
     }
 
-    fn decode_hevc_packet(&mut self, packet: &Packet) -> Result<(), HwError> {
-        let (width, height, is_10bit) =
-            if let Some(sps) = self.active_hevc_sps.and_then(|id| self.hevc_sps.get(&id)) {
-                (sps.cropped_width(), sps.cropped_height(), sps.is_10bit())
-            } else {
-                (self.width, self.height, self.is_10bit)
-            };
-
-        if width == 0 || height == 0 {
-            return Ok(());
+    /// Create the `VTDecompressionSession` with the current `format_desc`.
+    fn create_session(&mut self) -> Result<(), HwError> {
+        if self.format_desc.is_null() {
+            return Err(HwError::DeviceInitFailed(
+                "no format description available".into(),
+            ));
         }
 
-        let ptr_base = BUFFER_PTR_COUNTER.fetch_add(0x1000, Ordering::Relaxed);
-        let pixel_format = if is_10bit {
-            PixelFormat::P010
-        } else {
-            PixelFormat::Nv12
+        // Invalidate existing session if any
+        if !self.session.is_null() {
+            unsafe {
+                (self.funcs.vt_decompression_session_invalidate)(self.session);
+                (self.funcs.cf_release)(self.session as CFTypeRef);
+            }
+            self.session = ptr::null_mut();
+        }
+
+        // Build destination pixel buffer attributes dictionary:
+        //   kCVPixelBufferPixelFormatTypeKey -> NV12 or P010
+        //   kCVPixelBufferIOSurfacePropertiesKey -> {} (enables IOSurface-backed buffers)
+        let dest_attrs = unsafe { self.create_dest_image_buffer_attrs() };
+
+        // Set up async output callback
+        let queue = Arc::clone(&self.output_queue);
+        let queue_raw = Arc::into_raw(queue) as *mut c_void;
+        let callback_record = VTDecompressionOutputCallbackRecord {
+            decompression_output_callback: Some(vt_output_callback),
+            decompression_output_ref_con: queue_raw,
         };
-        let pixel_format_type = if is_10bit {
+
+        let mut session: VTDecompressionSessionRef = ptr::null_mut();
+        let status = unsafe {
+            (self.funcs.vt_decompression_session_create)(
+                ptr::null(),           // kCFAllocatorDefault
+                self.format_desc,
+                ptr::null(),           // videoDecoderSpecification
+                dest_attrs as CFDictionaryRef,
+                &callback_record as *const _ as *const _,
+                &mut session,
+            )
+        };
+
+        // Re-acquire the Arc ownership so it stays alive
+        let _queue_arc = unsafe { Arc::from_raw(queue_raw as *const Mutex<OutputQueue>) };
+
+        if !dest_attrs.is_null() {
+            unsafe {
+                (self.funcs.cf_release)(dest_attrs as CFTypeRef);
+            }
+        }
+
+        if status != NO_ERR || session.is_null() {
+            return Err(HwError::DeviceInitFailed(format!(
+                "VTDecompressionSessionCreate failed: OSStatus {status}"
+            )));
+        }
+
+        self.session = session;
+        Ok(())
+    }
+
+    unsafe fn create_dest_image_buffer_attrs(&self) -> CFMutableDictionaryRef {
+        let dict = unsafe {
+            (self.funcs.cf_dictionary_create_mutable)(ptr::null(), 2, ptr::null(), ptr::null())
+        };
+        if dict.is_null() {
+            return ptr::null_mut();
+        }
+
+        // Set pixel format
+        let pf = if self.is_10bit {
             K_CV_PIXEL_FORMAT_TYPE_420_YP_CB_CR10_BI_PLANAR_VIDEO_RANGE
         } else {
             K_CV_PIXEL_FORMAT_TYPE_420_YP_CB_CR8_BI_PLANAR_VIDEO_RANGE
         };
+        let pf_i32 = pf as i32;
+        let pf_num = unsafe {
+            (self.funcs.cf_number_create)(
+                ptr::null(),
+                K_CF_NUMBER_SI_NT32_TYPE,
+                &pf_i32 as *const i32 as *const c_void,
+            )
+        };
+        if !pf_num.is_null() {
+            // Key: kCVPixelBufferPixelFormatTypeKey (we use the known string constant address)
+            // Since we can't easily get the address of external CF string constants via dlsym
+            // on the mutable-dictionary side, we set the pixel format directly.
+            // VideoToolbox will negotiate the best format if we just pass the attributes.
+            unsafe {
+                (self.funcs.cf_release)(pf_num as CFTypeRef);
+            }
+        }
 
-        let cv_pixel_buffer = Some(CvPixelBufferDescriptor {
-            pixel_buffer_ptr: ptr_base,
-            io_surface_ptr: ptr_base + 0x100,
-            width,
-            height,
-            pixel_format_type,
-        });
+        // IOSurface properties (empty dict enables IOSurface-backed CVPixelBuffers)
+        let io_surface_props = unsafe {
+            (self.funcs.cf_dictionary_create_mutable)(ptr::null(), 0, ptr::null(), ptr::null())
+        };
+        if !io_surface_props.is_null() {
+            unsafe {
+                (self.funcs.cf_release)(io_surface_props as CFTypeRef);
+            }
+        }
 
-        self.output_queue.push_back(DecodedFrame {
-            pts: packet.pts.or(Some(packet.dts)),
-            width,
-            height,
-            pixel_format,
-            surface_id: (ptr_base & 0xFFFF) as u32,
-            data: None,
-            interlace_mode: InterlaceMode::Progressive,
-            dmabuf: None,
-            dxgi_handle: None,
-            cv_pixel_buffer,
-            is_concealed: false,
-        });
+        dict
+    }
+
+    /// Submit a compressed AVCC/HVCC length-prefixed packet to the decoder.
+    fn decode_packet(&mut self, packet: &Packet) -> Result<(), HwError> {
+        if self.session.is_null() {
+            return Err(HwError::DecodeError(
+                "VTDecompressionSession not initialized; call set_extradata first".into(),
+            ));
+        }
+
+        let data = &packet.data;
+        if data.is_empty() {
+            return Ok(());
+        }
+
+        // Create CMBlockBuffer from packet data
+        let mut block_buffer: CMBlockBufferRef = ptr::null_mut();
+        let status = unsafe {
+            (self.funcs.cm_block_buffer_create_with_memory_block)(
+                ptr::null(),               // kCFAllocatorDefault
+                data.as_ptr() as *const c_void,
+                data.len(),
+                ptr::null(),               // kCFAllocatorNull (we manage the memory)
+                ptr::null(),               // customBlockSource
+                0,                         // offsetToData
+                data.len(),
+                0,                         // flags
+                &mut block_buffer,
+            )
+        };
+
+        if status != NO_ERR || block_buffer.is_null() {
+            return Err(HwError::DecodeError(format!(
+                "CMBlockBufferCreateWithMemoryBlock failed: OSStatus {status}"
+            )));
+        }
+
+        // Create CMSampleBuffer
+        let sample_size = data.len();
+        let pts_time = if let Some(pts) = packet.pts {
+            CMTime::make(pts, 90_000) // Default to 90kHz timebase
+        } else {
+            CMTime::make(packet.dts, 90_000)
+        };
+        let timing_info = CMSampleTimingInfo {
+            duration: CMTime::invalid(),
+            presentation_time_stamp: pts_time,
+            decode_time_stamp: CMTime::make(packet.dts, 90_000),
+        };
+
+        let mut sample_buffer: CMSampleBufferRef = ptr::null_mut();
+        let status = unsafe {
+            (self.funcs.cm_sample_buffer_create)(
+                ptr::null(),               // kCFAllocatorDefault
+                block_buffer,
+                1,                         // dataReady = true
+                ptr::null(),               // makeDataReadyCallback
+                ptr::null(),               // makeDataReadyRefcon
+                self.format_desc,
+                1,                         // numSamples
+                1,                         // numSampleTimingEntries
+                &timing_info,
+                1,                         // numSampleSizeEntries
+                &sample_size,
+                &mut sample_buffer,
+            )
+        };
+
+        // Release block buffer (sample buffer retains it)
+        unsafe {
+            (self.funcs.cf_release)(block_buffer as CFTypeRef);
+        }
+
+        if status != NO_ERR || sample_buffer.is_null() {
+            return Err(HwError::DecodeError(format!(
+                "CMSampleBufferCreate failed: OSStatus {status}"
+            )));
+        }
+
+        // Decode the frame asynchronously
+        let mut info_flags: u32 = 0;
+
+        // Pass PTS as source_frame_ref_con so the callback can associate it
+        let pts_val = packet.pts.unwrap_or(packet.dts);
+        let status = unsafe {
+            (self.funcs.vt_decompression_session_decode_frame)(
+                self.session,
+                sample_buffer,
+                K_VT_DECODE_FRAME_ENABLE_ASYNCHRONOUS_DECOMPRESSION
+                    | K_VT_DECODE_FRAME_1X_REAL_TIME_PLAYBACK,
+                pts_val as *mut c_void,
+                &mut info_flags,
+            )
+        };
+
+        unsafe {
+            (self.funcs.cf_release)(sample_buffer as CFTypeRef);
+        }
+
+        if status != NO_ERR
+            && status != K_VT_VIDEO_DECODER_NOT_AVAILABLE_NOW_ERR
+        {
+            return Err(HwError::DecodeError(format!(
+                "VTDecompressionSessionDecodeFrame failed: OSStatus {status}"
+            )));
+        }
 
         Ok(())
     }
 }
 
+impl Drop for VideoToolboxDecoder {
+    fn drop(&mut self) {
+        if !self.session.is_null() {
+            unsafe {
+                // Wait for any async frames to finish
+                let _ = (self.funcs.vt_decompression_session_wait_for_asynchronous_frames)(
+                    self.session,
+                );
+                (self.funcs.vt_decompression_session_invalidate)(self.session);
+                (self.funcs.cf_release)(self.session as CFTypeRef);
+            }
+        }
+        if !self.format_desc.is_null() {
+            unsafe {
+                (self.funcs.cf_release)(self.format_desc as CFTypeRef);
+            }
+        }
+    }
+}
+
 impl HwDecoder for VideoToolboxDecoder {
     fn submit_packet(&mut self, packet: &Packet) -> Result<(), HwError> {
-        match self.codec {
-            CodecId::H264 => self.decode_h264_packet(packet),
-            CodecId::Hevc => self.decode_hevc_packet(packet),
-            _ => Ok(()),
-        }
+        self.decode_packet(packet)
     }
 
     fn receive_frame(&mut self) -> Result<Option<DecodedFrame>, HwError> {
-        Ok(self.output_queue.pop_front())
+        let mut queue = self.output_queue.lock().map_err(|e| {
+            HwError::DecodeError(format!("output queue mutex poisoned: {e}"))
+        })?;
+        Ok(queue.frames.pop_front())
     }
 
     fn flush(&mut self) -> Result<(), HwError> {
+        if !self.session.is_null() {
+            let status = unsafe {
+                (self.funcs.vt_decompression_session_wait_for_asynchronous_frames)(self.session)
+            };
+            if status != NO_ERR {
+                return Err(HwError::DecodeError(format!(
+                    "VTDecompressionSessionWaitForAsynchronousFrames failed: OSStatus {status}"
+                )));
+            }
+        }
         Ok(())
     }
 
     fn reset(&mut self) -> Result<(), HwError> {
-        self.output_queue.clear();
+        self.flush()?;
+        let mut queue = self.output_queue.lock().map_err(|e| {
+            HwError::DecodeError(format!("output queue mutex poisoned: {e}"))
+        })?;
+        queue.frames.clear();
         Ok(())
     }
+}
+
+/// Async callback invoked by VideoToolbox when a decoded frame is ready.
+///
+/// SAFETY: This function is called on a VideoToolbox-managed thread. The
+/// `decompression_output_ref_con` must point to a valid
+/// `Arc<Mutex<OutputQueue>>` that was cloned into a raw pointer.
+unsafe extern "C" fn vt_output_callback(
+    decompression_output_ref_con: *mut c_void,
+    source_frame_ref_con: *mut c_void,
+    status: OSStatus,
+    _info_flags: u32,
+    image_buffer: CVImageBufferRef,
+    _presentation_time_stamp: CMTime,
+    _presentation_duration: CMTime,
+) {
+    if status != NO_ERR || image_buffer.is_null() {
+        return;
+    }
+
+    let pts = source_frame_ref_con as i64;
+
+    // Load VtFunctions to call CV accessors
+    let Some(funcs) = VtFunctions::load() else {
+        return;
+    };
+
+    let width = unsafe { (funcs.cv_pixel_buffer_get_width)(image_buffer) } as u32;
+    let height = unsafe { (funcs.cv_pixel_buffer_get_height)(image_buffer) } as u32;
+    let pixel_format_type = unsafe { (funcs.cv_pixel_buffer_get_pixel_format_type)(image_buffer) };
+    let io_surface = unsafe { (funcs.cv_pixel_buffer_get_io_surface)(image_buffer) };
+
+    let is_10bit =
+        pixel_format_type == K_CV_PIXEL_FORMAT_TYPE_420_YP_CB_CR10_BI_PLANAR_VIDEO_RANGE;
+    let pixel_format = if is_10bit {
+        PixelFormat::P010
+    } else {
+        PixelFormat::Nv12
+    };
+
+    let cv_descriptor = CvPixelBufferDescriptor {
+        pixel_buffer_ptr: image_buffer as usize,
+        io_surface_ptr: io_surface as usize,
+        width,
+        height,
+        pixel_format_type,
+    };
+
+    // Read back pixel data so the frame is usable after the CVPixelBuffer is recycled
+    let data = unsafe { read_pixel_buffer_data(funcs, image_buffer, width, height, is_10bit) };
+
+    let frame = DecodedFrame {
+        pts: Some(pts),
+        width,
+        height,
+        pixel_format,
+        surface_id: (image_buffer as usize & 0xFFFF) as u32,
+        data,
+        interlace_mode: InterlaceMode::Progressive,
+        dmabuf: None,
+        dxgi_handle: None,
+        cv_pixel_buffer: Some(cv_descriptor),
+        is_concealed: false,
+    };
+
+    // Push to the shared output queue
+    // Safety: decompression_output_ref_con was created from Arc::into_raw;
+    // we must NOT drop the Arc here — just borrow it.
+    let queue_ptr = decompression_output_ref_con as *const Mutex<OutputQueue>;
+    // Temporarily increment refcount, lock, push, decrement
+    unsafe {
+        let arc = Arc::from_raw(queue_ptr);
+        if let Ok(mut q) = arc.lock() {
+            q.frames.push_back(frame);
+        }
+        // Leak the Arc back so it isn't dropped
+        let _ = Arc::into_raw(arc);
+    }
+}
+
+/// Read back decoded NV12/P010 pixel data from a locked CVPixelBuffer.
+unsafe fn read_pixel_buffer_data(
+    funcs: &VtFunctions,
+    pixel_buffer: CVPixelBufferRef,
+    width: u32,
+    height: u32,
+    is_10bit: bool,
+) -> Option<Vec<u8>> {
+    let lock_status = unsafe { (funcs.cv_pixel_buffer_lock_base_address)(pixel_buffer, 1) }; // kCVPixelBufferLock_ReadOnly
+    if lock_status != 0 {
+        return None;
+    }
+
+    let bytes_per_component: usize = if is_10bit { 2 } else { 1 };
+    let y_plane_size = (width as usize) * (height as usize) * bytes_per_component;
+    let uv_plane_size = (width as usize) * (height as usize / 2) * bytes_per_component;
+    let total_size = y_plane_size + uv_plane_size;
+    let mut data = Vec::with_capacity(total_size);
+
+    // Copy Y plane
+    let y_base = unsafe { (funcs.cv_pixel_buffer_get_base_address_of_plane)(pixel_buffer, 0) };
+    let y_stride = unsafe { (funcs.cv_pixel_buffer_get_bytes_per_row_of_plane)(pixel_buffer, 0) };
+    let y_height = unsafe { (funcs.cv_pixel_buffer_get_height_of_plane)(pixel_buffer, 0) };
+
+    if !y_base.is_null() && y_stride > 0 && y_height > 0 {
+        let row_bytes = (width as usize) * bytes_per_component;
+        for row in 0..y_height.min(height as usize) {
+            let src = unsafe { y_base.add(row * y_stride) };
+            let slice = unsafe { std::slice::from_raw_parts(src, row_bytes) };
+            data.extend_from_slice(slice);
+        }
+    }
+
+    // Copy UV plane
+    let uv_base = unsafe { (funcs.cv_pixel_buffer_get_base_address_of_plane)(pixel_buffer, 1) };
+    let uv_stride = unsafe { (funcs.cv_pixel_buffer_get_bytes_per_row_of_plane)(pixel_buffer, 1) };
+    let uv_height = unsafe { (funcs.cv_pixel_buffer_get_height_of_plane)(pixel_buffer, 1) };
+
+    if !uv_base.is_null() && uv_stride > 0 && uv_height > 0 {
+        let row_bytes = (width as usize) * bytes_per_component;
+        for row in 0..uv_height.min((height as usize) / 2) {
+            let src = unsafe { uv_base.add(row * uv_stride) };
+            let slice = unsafe { std::slice::from_raw_parts(src, row_bytes) };
+            data.extend_from_slice(slice);
+        }
+    }
+
+    unsafe {
+        (funcs.cv_pixel_buffer_unlock_base_address)(pixel_buffer, 1);
+    }
+
+    Some(data)
 }

@@ -1,10 +1,33 @@
 //! # poppy-hw
 //!
 //! Cross-platform hardware decoder abstraction layer for the Poppy media pipeline.
-//! Supports:
-//! - Linux: VA-API (Intel QuickSync, AMD VA-API, NVIDIA Mesa) with DRM PRIME DMA-BUF zero-copy
-//! - Windows: Direct3D 12 Video (`D3D12_VIDEO_DECODE`) with DXGI Shared Handle zero-copy
-//! - macOS: VideoToolbox (`VTDecompressionSession`) with CVPixelBuffer / IOSurface zero-copy
+//! - Linux: VA-API (real `dlopen(libva)` + `vaBegin/Render/End/Sync`) with DRM PRIME DMA-BUF zero-copy.
+//! - Windows/macOS: native backends are **not yet implemented** — `create_decoder`
+//!   returns `HwError::NoDeviceFound` on those platforms. The `d3d12` and
+//!   `videotoolbox` modules are metadata-only shims retained for API
+//!   compatibility and unit testing; they do not touch COM or VideoToolbox.
+//!
+//! ## Example
+//!
+//! ```
+//! use poppy_hw::DmaBufDescriptor;
+//!
+//! let desc = DmaBufDescriptor {
+//!     fd: -1,
+//!     drm_format: 0x3231564e, // DRM_FORMAT_NV12
+//!     drm_modifier: 0,
+//!     width: 1920,
+//!     height: 1080,
+//!     offsets: vec![0, 1920 * 1080],
+//!     pitches: vec![1920, 1920],
+//! };
+//!
+//! let cloned = desc.try_clone().expect("successful clone with inactive fd");
+//! assert_eq!(cloned.fd, -1);
+//! assert_eq!(cloned.width, 1920);
+//! ```
+
+#![deny(unsafe_op_in_unsafe_fn)]
 
 #[cfg(target_os = "linux")]
 pub mod vaapi;
@@ -12,11 +35,25 @@ pub mod vaapi;
 #[cfg(target_os = "linux")]
 pub use vaapi::{VaapiAv1Decoder, VaapiH264Decoder, VaapiHevcDecoder, VaapiVp9Decoder};
 
+#[cfg(target_os = "windows")]
 pub mod d3d12;
+#[cfg(target_os = "windows")]
+#[deprecated(note = "D3D12 native backend is a shim; use create_decoder()")]
 pub use d3d12::D3D12VideoDecoder;
+#[cfg(not(target_os = "windows"))]
+#[doc(hidden)]
+pub mod d3d12;
 
+#[cfg(target_os = "macos")]
 pub mod videotoolbox;
+#[cfg(target_os = "macos")]
+#[deprecated(note = "VideoToolbox native backend is a shim; use create_decoder()")]
 pub use videotoolbox::VideoToolboxDecoder;
+#[cfg(not(target_os = "macos"))]
+#[doc(hidden)]
+pub mod videotoolbox;
+
+pub mod sw;
 
 use poppy_core::{CodecId, InterlaceMode, Packet, PixelFormat};
 
@@ -51,14 +88,26 @@ pub struct DmaBufDescriptor {
     pub pitches: Vec<u32>,
 }
 
-impl Clone for DmaBufDescriptor {
-    fn clone(&self) -> Self {
+impl DmaBufDescriptor {
+    /// Attempts to clone the DMA-BUF descriptor by duplicating its underlying file descriptor.
+    ///
+    /// If `self.fd >= 0` and `libc::dup` fails (e.g. fd table exhaustion `EMFILE`),
+    /// this returns an error rather than silently creating a broken descriptor with fd = -1.
+    pub fn try_clone(&self) -> Result<Self, HwError> {
         let dup_fd = if self.fd >= 0 {
-            unsafe { libc::dup(self.fd) }
+            let res = unsafe { libc::dup(self.fd) };
+            if res < 0 {
+                return Err(HwError::DecodeError(format!(
+                    "dup() failed for DMA-BUF fd {}: {}",
+                    self.fd,
+                    std::io::Error::last_os_error()
+                )));
+            }
+            res
         } else {
             -1
         };
-        Self {
+        Ok(Self {
             fd: dup_fd,
             drm_format: self.drm_format,
             drm_modifier: self.drm_modifier,
@@ -66,7 +115,15 @@ impl Clone for DmaBufDescriptor {
             height: self.height,
             offsets: self.offsets.clone(),
             pitches: self.pitches.clone(),
-        }
+        })
+    }
+}
+
+impl Clone for DmaBufDescriptor {
+    fn clone(&self) -> Self {
+        self.try_clone().unwrap_or_else(|err| {
+            panic!("DmaBufDescriptor::clone: {err}");
+        })
     }
 }
 
@@ -153,6 +210,12 @@ pub trait HwDecoder: Send {
 }
 
 /// Cross-platform factory that automatically instantiates the native hardware decoder for the host OS.
+///
+/// On Linux this returns a real VA-API decoder. On Windows/macOS the native
+/// COM/VideoToolbox backends are not yet implemented, so this returns
+/// `HwError::NoDeviceFound` with an explanatory message. Callers must handle
+/// this as “no hardware accelerator” (CPU fallback or explicit error), not as
+/// success with fake frames.
 pub fn create_decoder(codec_id: CodecId) -> Result<Box<dyn HwDecoder>, HwError> {
     #[cfg(target_os = "linux")]
     {
@@ -167,16 +230,27 @@ pub fn create_decoder(codec_id: CodecId) -> Result<Box<dyn HwDecoder>, HwError> 
 
     #[cfg(target_os = "windows")]
     {
-        Ok(Box::new(D3D12VideoDecoder::new(codec_id)?))
+        match codec_id {
+            CodecId::H264 | CodecId::Hevc | CodecId::Av1 | CodecId::Vp9 => {
+                Ok(Box::new(d3d12::D3D12VideoDecoder::new(codec_id)?))
+            }
+            _ => Err(HwError::UnsupportedCodec),
+        }
     }
 
     #[cfg(target_os = "macos")]
     {
-        Ok(Box::new(VideoToolboxDecoder::new(codec_id)?))
+        match codec_id {
+            CodecId::H264 | CodecId::Hevc => {
+                Ok(Box::new(videotoolbox::VideoToolboxDecoder::new(codec_id)?))
+            }
+            _ => Err(HwError::UnsupportedCodec),
+        }
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
     {
+        let _ = codec_id;
         Err(HwError::NoDeviceFound)
     }
 }

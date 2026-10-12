@@ -228,7 +228,11 @@ impl HwDecoder for VaapiHevcDecoder {
                     let w = sps.cropped_width();
                     let h = sps.cropped_height();
                     let dmabuf = pool.export_dmabuf_descriptor(rf.surface_id).ok();
-                    let data = pool.read_surface_data(rf.surface_id, w, h).ok();
+                    let data = if dmabuf.is_none() {
+                        pool.read_surface_data(rf.surface_id, w, h).ok()
+                    } else {
+                        None
+                    }; // lazy: skip CPU readback on zero-copy path
                     self.output_queue.push_back(DecodedFrame {
                         pts: rf.pts,
                         width: w,
@@ -249,40 +253,55 @@ impl HwDecoder for VaapiHevcDecoder {
                 }
             }
 
-            // Pre-bump if DPB reaches max_dec_pic_buffering
+            // Pre-bump if DPB reaches max_dec_pic_buffering.
+            // Respect reference status: evict non-reference, already-output frames first;
+            // only bump needed_for_output frames (in POC order) when forced.
             let max_dpb = (sps.max_dec_pic_buffering[0] as usize).max(1);
             while self.dpb.frames.len() >= max_dpb {
+                // 1. Drop non-reference, already-output frames (no output needed).
+                if let Some(idx) = self
+                    .dpb
+                    .frames
+                    .iter()
+                    .position(|f| !f.is_reference && !f.needed_for_output)
+                {
+                    self.dpb.frames.remove(idx);
+                    continue;
+                }
+                // 2. Bump oldest needed_for_output frame (min POC).
                 if let Some((min_idx, _)) = self
                     .dpb
                     .frames
                     .iter()
                     .enumerate()
+                    .filter(|(_, f)| f.needed_for_output)
                     .min_by_key(|(_, f)| f.poc)
                 {
                     let bumped = self.dpb.frames.remove(min_idx);
-                    if bumped.needed_for_output {
-                        let dmabuf = pool.export_dmabuf_descriptor(bumped.surface_id).ok();
-                        let data = pool
-                            .read_surface_data(bumped.surface_id, bumped.width, bumped.height)
-                            .ok();
-                        self.output_queue.push_back(DecodedFrame {
-                            pts: bumped.pts,
-                            width: bumped.width,
-                            height: bumped.height,
-                            pixel_format: if self.is_10bit {
-                                PixelFormat::P010
-                            } else {
-                                PixelFormat::Nv12
-                            },
-                            surface_id: bumped.surface_id,
-                            data,
-                            interlace_mode: bumped.interlace_mode,
-                            dmabuf,
-                            dxgi_handle: None,
-                            cv_pixel_buffer: None,
-                            is_concealed: bumped.is_concealed,
-                        });
-                    }
+                    let dmabuf = pool.export_dmabuf_descriptor(bumped.surface_id).ok();
+                    let data = if dmabuf.is_none() {
+                        pool.read_surface_data(bumped.surface_id, bumped.width, bumped.height)
+                            .ok()
+                    } else {
+                        None
+                    }; // lazy zero-copy
+                    self.output_queue.push_back(DecodedFrame {
+                        pts: bumped.pts,
+                        width: bumped.width,
+                        height: bumped.height,
+                        pixel_format: if self.is_10bit {
+                            PixelFormat::P010
+                        } else {
+                            PixelFormat::Nv12
+                        },
+                        surface_id: bumped.surface_id,
+                        data,
+                        interlace_mode: bumped.interlace_mode,
+                        dmabuf,
+                        dxgi_handle: None,
+                        cv_pixel_buffer: None,
+                        is_concealed: bumped.is_concealed,
+                    });
                 } else {
                     break;
                 }
@@ -650,6 +669,64 @@ impl HwDecoder for VaapiHevcDecoder {
                     } else {
                         0
                     };
+                    // Prediction weights (previously parsed-and-discarded; now mapped).
+                    if let Some(pw) = &slice.pred_weights {
+                        slice_param.luma_log2_weight_denom = pw.luma_log2_weight_denom.min(7) as u8;
+                        slice_param.delta_chroma_log2_weight_denom =
+                            pw.delta_chroma_log2_weight_denom.clamp(-7, 7) as i8;
+                        for i in 0..(slice.num_ref_idx_l0_active.min(15) as usize) {
+                            if pw.luma_weight_l0_flag.get(i).copied().unwrap_or(false) {
+                                slice_param.delta_luma_weight_l0[i] =
+                                    pw.delta_luma_weight_l0.get(i).copied().unwrap_or(0).clamp(-127, 127) as i8;
+                                slice_param.luma_offset_l0[i] =
+                                    pw.luma_offset_l0.get(i).copied().unwrap_or(0).clamp(-127, 127) as i8;
+                            }
+                            if pw.chroma_weight_l0_flag.get(i).copied().unwrap_or(false) {
+                                for c in 0..2 {
+                                    slice_param.delta_chroma_weight_l0[i][c] = pw
+                                        .delta_chroma_weight_l0
+                                        .get(i)
+                                        .map(|a| a[c])
+                                        .unwrap_or(0)
+                                        .clamp(-127, 127)
+                                        as i8;
+                                    slice_param.chroma_offset_l0[i][c] = pw
+                                        .chroma_offset_l0
+                                        .get(i)
+                                        .map(|a| a[c])
+                                        .unwrap_or(0)
+                                        .clamp(-127, 127)
+                                        as i8;
+                                }
+                            }
+                        }
+                        for i in 0..(slice.num_ref_idx_l1_active.min(15) as usize) {
+                            if pw.luma_weight_l1_flag.get(i).copied().unwrap_or(false) {
+                                slice_param.delta_luma_weight_l1[i] =
+                                    pw.delta_luma_weight_l1.get(i).copied().unwrap_or(0).clamp(-127, 127) as i8;
+                                slice_param.luma_offset_l1[i] =
+                                    pw.luma_offset_l1.get(i).copied().unwrap_or(0).clamp(-127, 127) as i8;
+                            }
+                            if pw.chroma_weight_l1_flag.get(i).copied().unwrap_or(false) {
+                                for c in 0..2 {
+                                    slice_param.delta_chroma_weight_l1[i][c] = pw
+                                        .delta_chroma_weight_l1
+                                        .get(i)
+                                        .map(|a| a[c])
+                                        .unwrap_or(0)
+                                        .clamp(-127, 127)
+                                        as i8;
+                                    slice_param.chroma_offset_l1[i][c] = pw
+                                        .chroma_offset_l1
+                                        .get(i)
+                                        .map(|a| a[c])
+                                        .unwrap_or(0)
+                                        .clamp(-127, 127)
+                                        as i8;
+                                }
+                            }
+                        }
+                    }
 
                     let mut slice_param_buf = 0;
                     let status = (va.vaCreateBuffer)(
@@ -700,7 +777,7 @@ impl HwDecoder for VaapiHevcDecoder {
                 let end_status = (va.vaEndPicture)(dpy, ctx);
                 if end_status != VA_STATUS_SUCCESS {
                     let err_msg = va.err_str(end_status);
-                    if err_msg.contains("decoding error") || err_msg.contains("error") {
+                    if end_status == crate::vaapi::ffi::VA_STATUS_ERROR_DECODING_ERROR {
                         is_concealed = true;
                         eprintln!(
                             "VA-API HEVC warning: {} (concealed corrupted frame)",
@@ -713,17 +790,14 @@ impl HwDecoder for VaapiHevcDecoder {
 
                 let mut sync_status = (va.vaSyncSurface)(dpy, target_surface);
                 let mut retries = 0;
-                while sync_status == 34 && retries < 50 {
+                while sync_status == crate::vaapi::ffi::VA_STATUS_ERROR_HW_BUSY && retries < 50 {
                     std::thread::sleep(std::time::Duration::from_millis(1));
                     sync_status = (va.vaSyncSurface)(dpy, target_surface);
                     retries += 1;
                 }
                 if sync_status != VA_STATUS_SUCCESS {
                     let err_msg = va.err_str(sync_status);
-                    if err_msg.contains("decoding error")
-                        || err_msg.contains("error")
-                        || sync_status == 34
-                    {
+                    if sync_status == crate::vaapi::ffi::VA_STATUS_ERROR_DECODING_ERROR {
                         is_concealed = true;
                         eprintln!(
                             "VA-API HEVC warning: {} (concealed corrupted frame)",
@@ -738,11 +812,13 @@ impl HwDecoder for VaapiHevcDecoder {
                 }
             }
 
+            // Non-reference pictures (TRAIL_N/TSA_N/STSA_N/RADL_N/RASL_N) must not be retained as references.
+            let is_ref = first_nut.is_reference();
             let released = self.dpb.insert(DpbFrame {
                 surface_id: target_surface,
                 frame_num: 0,
                 poc: cur_poc,
-                is_reference: true,
+                is_reference: is_ref,
                 is_long_term: false,
                 pts: packet.pts.or(Some(packet.dts)),
                 needed_for_output: true,
@@ -754,9 +830,12 @@ impl HwDecoder for VaapiHevcDecoder {
 
             for rf in released {
                 let dmabuf = pool.export_dmabuf_descriptor(rf.surface_id).ok();
-                let data = pool
-                    .read_surface_data(rf.surface_id, rf.width, rf.height)
-                    .ok();
+                let data = if dmabuf.is_none() {
+                    pool.read_surface_data(rf.surface_id, rf.width, rf.height)
+                        .ok()
+                } else {
+                    None
+                }; // lazy zero-copy
                 self.output_queue.push_back(DecodedFrame {
                     pts: rf.pts,
                     width: rf.width,
@@ -791,10 +870,13 @@ impl HwDecoder for VaapiHevcDecoder {
                 .pool
                 .as_ref()
                 .and_then(|p| p.export_dmabuf_descriptor(rf.surface_id).ok());
-            let data = self
-                .pool
-                .as_ref()
-                .and_then(|p| p.read_surface_data(rf.surface_id, rf.width, rf.height).ok());
+            let data = if dmabuf.is_none() {
+                self.pool
+                    .as_ref()
+                    .and_then(|p| p.read_surface_data(rf.surface_id, rf.width, rf.height).ok())
+            } else {
+                None
+            }; // lazy zero-copy
             self.output_queue.push_back(DecodedFrame {
                 pts: rf.pts,
                 width: rf.width,

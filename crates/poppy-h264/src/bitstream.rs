@@ -14,30 +14,45 @@ pub enum BitstreamError {
 
     #[error("invalid bit count {0} (must be 1..=32)")]
     InvalidBitCount(usize),
+
+    #[error("invalid syntax element: {0}")]
+    InvalidSyntax(String),
 }
 
 /// Strips H.264 emulation prevention bytes (`0x00 0x00 0x03`) to produce
 /// raw byte sequence payload (RBSP).
 ///
-/// Reference: ITU-T H.264 §7.3.1
+/// Per ITU-T H.264 §7.3.1, `emulation_prevention_three_byte` (0x03) is only
+/// inserted when the next byte would be `<= 0x03` (to prevent start-code
+/// emulation). A compliant `00 00 03 04` sequence carries a genuine 0x03 data
+/// byte and must NOT be stripped. We therefore peek at the following byte
+/// and only drop 0x03 when it is `<= 0x03` or at end-of-buffer.
 pub fn remove_emulation_prevention(nal_payload: &[u8]) -> Vec<u8> {
     let mut rbsp = Vec::with_capacity(nal_payload.len());
-    let mut zero_count = 0;
-
-    for &b in nal_payload {
-        if zero_count >= 2 && b == 0x03 {
-            // Drop emulation prevention byte 0x03, reset count
-            zero_count = 0;
-            continue;
+    let mut i = 0usize;
+    while i < nal_payload.len() {
+        // Look for 00 00 03 pattern with at least two prior zeros in the
+        // *original* stream (track zeros in the input, not output).
+        if i + 2 < nal_payload.len()
+            && nal_payload[i] == 0x00
+            && nal_payload[i + 1] == 0x00
+            && nal_payload[i + 2] == 0x03
+        {
+            let next = if i + 3 < nal_payload.len() {
+                Some(nal_payload[i + 3])
+            } else {
+                None
+            };
+            // Drop only if next byte <= 0x03 or at end (trailing prevention).
+            if next.map(|b| b <= 0x03).unwrap_or(true) {
+                rbsp.push(0x00);
+                rbsp.push(0x00);
+                i += 3; // skip the 0x03
+                continue;
+            }
         }
-
-        rbsp.push(b);
-
-        if b == 0x00 {
-            zero_count += 1;
-        } else {
-            zero_count = 0;
-        }
+        rbsp.push(nal_payload[i]);
+        i += 1;
     }
 
     rbsp
@@ -142,13 +157,17 @@ impl<'a> BitReader<'a> {
         }
     }
 
-    /// Read a truncated Exp-Golomb integer `te(v)`.
+    /// Read a truncated Exp-Golomb integer `te(v)` with range 0..=max.
+    /// Per H.264 §9.1: if max==0 reads 0 bits and returns 0; if max==1 reads
+    /// 1 bit (complement); otherwise reads ue(v).
     pub fn read_te(&mut self, max: u32) -> Result<u32, BitstreamError> {
-        if max > 1 {
-            self.read_ue()
-        } else {
+        if max == 0 {
+            Ok(0)
+        } else if max == 1 {
             let b = self.read_bit()?;
             Ok(if b { 0 } else { 1 })
+        } else {
+            self.read_ue()
         }
     }
 

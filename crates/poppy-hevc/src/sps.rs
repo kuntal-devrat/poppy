@@ -294,8 +294,8 @@ fn parse_short_term_ref_pic_set(
         } else {
             0
         };
-        let _delta_rps_sign = reader.read_bit()?;
-        let _abs_delta_rps_minus1 = reader.read_ue()?;
+        let delta_rps_sign = reader.read_bit()?;
+        let abs_delta_rps_minus1 = reader.read_ue()?;
 
         let delta = match (delta_idx_minus1 as usize).checked_add(1) {
             Some(d) => d,
@@ -311,22 +311,93 @@ fn parse_short_term_ref_pic_set(
             )));
         }
         let ref_rps_idx = st_rps_idx as usize - delta;
-        let num_pics = if ref_rps_idx < existing_sets.len() {
-            existing_sets[ref_rps_idx]
-                .num_negative_pics
-                .saturating_add(existing_sets[ref_rps_idx].num_positive_pics)
-        } else {
-            0
+        let ref_set = existing_sets.get(ref_rps_idx).ok_or_else(|| {
+            BitstreamError::InvalidSyntax(format!("ref_rps_idx {ref_rps_idx} out of range"))
+        })?;
+
+        // Ordered DeltaPoc list of reference RPS: S0 (negative) then S1 (positive).
+        let mut ref_deltas: Vec<i32> =
+            Vec::with_capacity(ref_set.delta_poc_s0.len() + ref_set.delta_poc_s1.len());
+        ref_deltas.extend_from_slice(&ref_set.delta_poc_s0);
+        ref_deltas.extend_from_slice(&ref_set.delta_poc_s1);
+        let num_pics = ref_deltas.len();
+        if num_pics > 32 {
+            return Err(BitstreamError::InvalidSyntax(format!(
+                "ref RPS has {num_pics} pics, exceeds 32"
+            )));
+        }
+
+        // DeltaRps = (1 - 2*sign) * (abs+1) per H.265 (7-55).
+        let delta_rps: i32 = {
+            let abs = abs_delta_rps_minus1.min(i32::MAX as u32) as i32 + 1;
+            if delta_rps_sign { -abs } else { abs }
         };
 
+        // Read per-pic flags: used_by_curr_pic_flag[j], and use_delta_flag[j]
+        // when !used (H.265 §7.3.7).
+        let mut used_flags: Vec<bool> = Vec::with_capacity(num_pics.saturating_add(1));
+        let mut use_delta_flags: Vec<bool> = Vec::with_capacity(num_pics.saturating_add(1));
         for _ in 0..=num_pics {
-            let used_by_curr_pic_flag = reader.read_bit()?;
-            if !used_by_curr_pic_flag {
-                let _use_delta_flag = reader.read_bit()?;
+            // Note: spec reads NumDeltaPocs[ref]+1 flags (includes one extra for new pic).
+            // The last flag corresponds to the newly derived pic at DeltaRps.
+            let used = reader.read_bit()?;
+            used_flags.push(used);
+            if !used {
+                use_delta_flags.push(reader.read_bit()?);
+            } else {
+                use_delta_flags.push(false);
             }
         }
 
-        Ok(ShortTermRefPicSet::default())
+        // Derive new RPS per H.265 (7-56)..(7-59):
+        // For each ref pic j, dPoc = DeltaPoc[ref][j] + DeltaRps.
+        // If used_flag[j], include dPoc in S0 (dPoc<0) or S1 (dPoc>0) as used.
+        // If !used but use_delta, include as unused (for DPB management).
+        // The extra (num_pics-th) flag corresponds to dPoc = DeltaRps itself.
+        let mut delta_poc_s0: Vec<i32> = Vec::new();
+        let mut used_s0: Vec<bool> = Vec::new();
+        let mut delta_poc_s1: Vec<i32> = Vec::new();
+        let mut used_s1: Vec<bool> = Vec::new();
+
+        #[allow(clippy::needless_range_loop)]
+        for j in 0..=num_pics {
+            let d_poc: i32 = if j < num_pics {
+                ref_deltas[j].saturating_add(delta_rps)
+            } else {
+                delta_rps
+            };
+            if d_poc == 0 {
+                continue; // dPoc==0 never included
+            }
+            let used = used_flags.get(j).copied().unwrap_or(false);
+            let use_delta = use_delta_flags.get(j).copied().unwrap_or(false);
+            if used || use_delta {
+                // used flag determines reference marking; use_delta-only pics are unused.
+                let is_used = used;
+                if d_poc < 0 {
+                    delta_poc_s0.push(d_poc);
+                    used_s0.push(is_used);
+                } else {
+                    delta_poc_s1.push(d_poc);
+                    used_s1.push(is_used);
+                }
+            }
+        }
+
+        if delta_poc_s0.len() > 16 || delta_poc_s1.len() > 16 {
+            return Err(BitstreamError::InvalidSyntax(
+                "derived inter-RPS exceeds 16 pics per list".into(),
+            ));
+        }
+
+        Ok(ShortTermRefPicSet {
+            num_negative_pics: delta_poc_s0.len() as u32,
+            num_positive_pics: delta_poc_s1.len() as u32,
+            delta_poc_s0,
+            used_by_curr_pic_s0: used_s0,
+            delta_poc_s1,
+            used_by_curr_pic_s1: used_s1,
+        })
     } else {
         let num_negative_pics = reader.read_ue()?;
         let num_positive_pics = reader.read_ue()?;

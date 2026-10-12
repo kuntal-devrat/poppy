@@ -44,21 +44,41 @@ impl PixelFormat {
         }
     }
 
-    /// Returns the chroma subsampling for this format.
-    pub fn chroma_subsampling(self) -> ChromaSubsampling {
+    /// Returns the chroma subsampling for this format, or `None` for RGB
+    /// formats which have no YUV subsampling.
+    pub fn chroma_subsampling(self) -> Option<ChromaSubsampling> {
         match self {
             PixelFormat::Nv12 | PixelFormat::P010 | PixelFormat::Yuv420p => {
-                ChromaSubsampling::Yuv420
+                Some(ChromaSubsampling::Yuv420)
             }
-            PixelFormat::Rgba32 => ChromaSubsampling::Yuv444,
+            // RGBA has no chroma subsampling; previously returned Yuv444
+            // which was misleading.
+            PixelFormat::Rgba32 => None,
         }
     }
 
+    /// Legacy non-optional accessor. Returns Yuv420 for YUV formats and
+    /// Yuv444 as a fallback for RGB (prefer `chroma_subsampling()`).
+    pub fn chroma_subsampling_or_fallback(self) -> ChromaSubsampling {
+        self.chroma_subsampling()
+            .unwrap_or(ChromaSubsampling::Yuv444)
+    }
+
     /// Returns the number of bits per component (per channel).
+    /// For Rgba32 this is 8 bits per component (32 bits total per pixel).
     pub fn bit_depth(self) -> u8 {
         match self {
             PixelFormat::Nv12 | PixelFormat::Yuv420p | PixelFormat::Rgba32 => 8,
             PixelFormat::P010 => 10,
+        }
+    }
+
+    /// Total bits per pixel (all components).
+    pub fn bits_per_pixel(self) -> u8 {
+        match self {
+            PixelFormat::Nv12 | PixelFormat::Yuv420p => 12, // 4:2:0 8-bit avg
+            PixelFormat::P010 => 24,                        // 4:2:0 10-bit in 16-bit containers avg
+            PixelFormat::Rgba32 => 32,
         }
     }
 
@@ -155,8 +175,10 @@ mod tests {
         assert_eq!(PixelFormat::Nv12.bit_depth(), 8);
         assert_eq!(
             PixelFormat::Nv12.chroma_subsampling(),
-            ChromaSubsampling::Yuv420
+            Some(ChromaSubsampling::Yuv420)
         );
+        // RGBA has no YUV subsampling.
+        assert_eq!(PixelFormat::Rgba32.chroma_subsampling(), None);
     }
 
     #[test]

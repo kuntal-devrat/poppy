@@ -230,3 +230,139 @@ fn test_mp4_demux_end_to_end() {
     assert_eq!(pkt_rewind.dts, 0);
     assert!(pkt_rewind.is_keyframe);
 }
+
+#[test]
+fn test_mp4_edit_list_timestamp_offset() {
+    // 1. ftyp box
+    let ftyp = make_box(b"ftyp", b"isom\0\0\x02\0isomiso2mp41");
+
+    // 2. mdat
+    let sample0 = [0, 0, 0, 4, 0x65, 1, 2, 3];
+    let sample1 = [0, 0, 0, 6, 0x41, 4, 5, 6, 7, 8];
+    let mut mdat_payload = Vec::new();
+    mdat_payload.extend_from_slice(&sample0);
+    mdat_payload.extend_from_slice(&sample1);
+    let mdat = make_box(b"mdat", &mdat_payload);
+    let mdat_body_offset = (ftyp.len() + 8) as u64;
+
+    // 3. avcC box
+    let avcc_payload = vec![
+        1, 0x64, 0x00, 0x1F, 0xFF, 0xE1, 0x00, 4,
+        0x67, 0x64, 0x00, 0x1F, 1, 0x00, 3, 0x68, 0xEB, 0xE3,
+    ];
+    let avcc_box = make_box(b"avcC", &avcc_payload);
+
+    // avc1 box
+    let mut avc1_payload = vec![0u8; 78];
+    avc1_payload[24..26].copy_from_slice(&1920u16.to_be_bytes());
+    avc1_payload[26..28].copy_from_slice(&1080u16.to_be_bytes());
+    avc1_payload.extend_from_slice(&avcc_box);
+    let avc1_box = make_box(b"avc1", &avc1_payload);
+
+    // stsd box
+    let mut stsd_payload = Vec::new();
+    stsd_payload.extend_from_slice(&1u32.to_be_bytes());
+    stsd_payload.extend_from_slice(&avc1_box);
+    let stsd_box = make_fullbox(b"stsd", 0, [0, 0, 0], &stsd_payload);
+
+    // stts box: 2 samples, each 1000 duration
+    let mut stts_payload = Vec::new();
+    stts_payload.extend_from_slice(&1u32.to_be_bytes());
+    stts_payload.extend_from_slice(&2u32.to_be_bytes());
+    stts_payload.extend_from_slice(&1000u32.to_be_bytes());
+    let stts_box = make_fullbox(b"stts", 0, [0, 0, 0], &stts_payload);
+
+    // stss box: keyframe at sample 1 (1-indexed)
+    let mut stss_payload = Vec::new();
+    stss_payload.extend_from_slice(&1u32.to_be_bytes());
+    stss_payload.extend_from_slice(&1u32.to_be_bytes());
+    let stss_box = make_fullbox(b"stss", 0, [0, 0, 0], &stss_payload);
+
+    // stsc box
+    let mut stsc_payload = Vec::new();
+    stsc_payload.extend_from_slice(&1u32.to_be_bytes());
+    stsc_payload.extend_from_slice(&1u32.to_be_bytes());
+    stsc_payload.extend_from_slice(&2u32.to_be_bytes());
+    stsc_payload.extend_from_slice(&1u32.to_be_bytes());
+    let stsc_box = make_fullbox(b"stsc", 0, [0, 0, 0], &stsc_payload);
+
+    // stsz box
+    let mut stsz_payload = Vec::new();
+    stsz_payload.extend_from_slice(&0u32.to_be_bytes());
+    stsz_payload.extend_from_slice(&2u32.to_be_bytes());
+    stsz_payload.extend_from_slice(&(sample0.len() as u32).to_be_bytes());
+    stsz_payload.extend_from_slice(&(sample1.len() as u32).to_be_bytes());
+    let stsz_box = make_fullbox(b"stsz", 0, [0, 0, 0], &stsz_payload);
+
+    // stco box
+    let mut stco_payload = Vec::new();
+    stco_payload.extend_from_slice(&1u32.to_be_bytes());
+    stco_payload.extend_from_slice(&(mdat_body_offset as u32).to_be_bytes());
+    let stco_box = make_fullbox(b"stco", 0, [0, 0, 0], &stco_payload);
+
+    // stbl box
+    let mut stbl_payload = Vec::new();
+    stbl_payload.extend_from_slice(&stsd_box);
+    stbl_payload.extend_from_slice(&stts_box);
+    stbl_payload.extend_from_slice(&stss_box);
+    stbl_payload.extend_from_slice(&stsc_box);
+    stbl_payload.extend_from_slice(&stsz_box);
+    stbl_payload.extend_from_slice(&stco_box);
+    let stbl_box = make_box(b"stbl", &stbl_payload);
+
+    let minf_box = make_box(b"minf", &stbl_box);
+
+    let mut hdlr_payload = vec![0u8; 16];
+    hdlr_payload[4..8].copy_from_slice(b"vide");
+    let hdlr_box = make_fullbox(b"hdlr", 0, [0, 0, 0], &hdlr_payload);
+
+    let mut mdhd_payload = vec![0u8; 20];
+    mdhd_payload[8..12].copy_from_slice(&30000u32.to_be_bytes());
+    mdhd_payload[12..16].copy_from_slice(&2000u32.to_be_bytes());
+    let mdhd_box = make_fullbox(b"mdhd", 0, [0, 0, 0], &mdhd_payload);
+
+    let mut mdia_payload = Vec::new();
+    mdia_payload.extend_from_slice(&mdhd_box);
+    mdia_payload.extend_from_slice(&hdlr_box);
+    mdia_payload.extend_from_slice(&minf_box);
+    let mdia_box = make_box(b"mdia", &mdia_payload);
+
+    let mut tkhd_payload = vec![0u8; 80];
+    tkhd_payload[8..12].copy_from_slice(&1u32.to_be_bytes());
+    tkhd_payload[16..20].copy_from_slice(&2000u32.to_be_bytes());
+    tkhd_payload[72..76].copy_from_slice(&(1920u32 << 16).to_be_bytes());
+    tkhd_payload[76..80].copy_from_slice(&(1080u32 << 16).to_be_bytes());
+    let tkhd_box = make_fullbox(b"tkhd", 0, [0, 0, 0], &tkhd_payload);
+
+    // edts + elst box: media_time = 1000 (shifts timestamps by -1000)
+    let mut elst_payload = Vec::new();
+    elst_payload.extend_from_slice(&1u32.to_be_bytes()); // entry_count = 1
+    elst_payload.extend_from_slice(&2000u32.to_be_bytes()); // segment_duration = 2000
+    elst_payload.extend_from_slice(&1000i32.to_be_bytes()); // media_time = 1000
+    elst_payload.extend_from_slice(&0x00010000u32.to_be_bytes()); // media_rate = 1.0
+    let elst_box = make_fullbox(b"elst", 0, [0, 0, 0], &elst_payload);
+    let edts_box = make_box(b"edts", &elst_box);
+
+    let mut trak_payload = Vec::new();
+    trak_payload.extend_from_slice(&tkhd_box);
+    trak_payload.extend_from_slice(&edts_box);
+    trak_payload.extend_from_slice(&mdia_box);
+    let trak_box = make_box(b"trak", &trak_payload);
+
+    let moov_box = make_box(b"moov", &trak_box);
+
+    let mut mp4_file = Vec::new();
+    mp4_file.extend_from_slice(&ftyp);
+    mp4_file.extend_from_slice(&mdat);
+    mp4_file.extend_from_slice(&moov_box);
+
+    let mut demuxer = Mp4Demuxer::from_bytes(Bytes::from(mp4_file)).expect("open MP4 with edts");
+
+    let pkt0 = demuxer.read_packet().unwrap().expect("packet 0");
+    // Sample 0 original dts was 0; with media_time = 1000, shifted to -1000
+    assert_eq!(pkt0.dts, -1000);
+
+    let pkt1 = demuxer.read_packet().unwrap().expect("packet 1");
+    // Sample 1 original dts was 1000; with media_time = 1000, shifted to 0
+    assert_eq!(pkt1.dts, 0);
+}

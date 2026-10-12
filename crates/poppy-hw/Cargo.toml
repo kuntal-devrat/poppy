@@ -17,4 +17,5 @@ thiserror = { workspace = true }
 libc = { workspace = true }
 
 [dev-dependencies]
+proptest = { workspace = true }
 poppy-demux = { workspace = true }

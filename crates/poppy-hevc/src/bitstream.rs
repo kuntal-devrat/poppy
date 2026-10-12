@@ -22,25 +22,31 @@ pub enum BitstreamError {
 /// Strips H.265 emulation prevention bytes (`0x00 0x00 0x03`) to produce
 /// raw byte sequence payload (RBSP).
 ///
-/// Reference: ITU-T H.265 §7.3.1.1
+/// Reference: ITU-T H.265 §7.3.1.1 — same rule as H.264: only drop 0x03 when
+/// the following byte is `<= 0x03` (or at end of buffer).
 pub fn remove_emulation_prevention(nal_payload: &[u8]) -> Vec<u8> {
     let mut rbsp = Vec::with_capacity(nal_payload.len());
-    let mut zero_count = 0;
-
-    for &b in nal_payload {
-        if zero_count >= 2 && b == 0x03 {
-            // Drop emulation prevention byte 0x03, reset count
-            zero_count = 0;
-            continue;
+    let mut i = 0usize;
+    while i < nal_payload.len() {
+        if i + 2 < nal_payload.len()
+            && nal_payload[i] == 0x00
+            && nal_payload[i + 1] == 0x00
+            && nal_payload[i + 2] == 0x03
+        {
+            let next = if i + 3 < nal_payload.len() {
+                Some(nal_payload[i + 3])
+            } else {
+                None
+            };
+            if next.map(|b| b <= 0x03).unwrap_or(true) {
+                rbsp.push(0x00);
+                rbsp.push(0x00);
+                i += 3;
+                continue;
+            }
         }
-
-        rbsp.push(b);
-
-        if b == 0x00 {
-            zero_count += 1;
-        } else {
-            zero_count = 0;
-        }
+        rbsp.push(nal_payload[i]);
+        i += 1;
     }
 
     rbsp
@@ -150,7 +156,8 @@ impl<'a> BitReader<'a> {
 
     /// Read a signed Exponential-Golomb coded integer (`se(v)`).
     ///
-    /// Mapping: code_num = 2*|val| (val > 0), code_num = 2*|val| - 1 (val < 0).
+    /// Mapping (H.265 §9.2): `codeNum==0 → 0`, odd `codeNum → (codeNum+1)/2`,
+    /// even `codeNum → -(codeNum/2)`.
     ///
     /// Reference: ITU-T H.265 §9.2
     pub fn read_se(&mut self) -> Result<i32, BitstreamError> {

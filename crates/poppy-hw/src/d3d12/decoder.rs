@@ -38,7 +38,11 @@ pub struct D3D12VideoDecoder {
 
 impl D3D12VideoDecoder {
     pub fn new(codec: CodecId) -> Result<Self, HwError> {
-        if codec != CodecId::H264 && codec != CodecId::Hevc && codec != CodecId::Vp9 {
+        if codec != CodecId::H264
+            && codec != CodecId::Hevc
+            && codec != CodecId::Vp9
+            && codec != CodecId::Av1
+        {
             return Err(HwError::UnsupportedCodec);
         }
         let device = D3D12VideoDevice::open()?;
@@ -133,7 +137,7 @@ impl D3D12VideoDecoder {
             None => true,
         };
         if need_alloc {
-            self.pool = Some(D3D12SurfacePool::new(width, height, 16, is_10bit)?);
+            self.pool = Some(D3D12SurfacePool::new(&self.device, width, height, 16, is_10bit)?);
             self.cur_surface_idx = 0;
         }
         Ok(())
@@ -255,7 +259,7 @@ impl D3D12VideoDecoder {
                 None => continue,
             };
 
-            let (_first_nal, first_header, first_slice) = &slices[0];
+            let (_first_nal, _first_header, first_slice) = &slices[0];
             let target_surface = &pool.surfaces[self.cur_surface_idx];
 
             // Detect interlaced format
@@ -318,7 +322,7 @@ impl D3D12VideoDecoder {
                 dmabuf: None,
                 dxgi_handle,
                 cv_pixel_buffer: None,
-                is_concealed: first_header.nal_ref_idc > 0 && false,
+                is_concealed: false, /* metadata-only shim: no HW concealment signal */
             });
 
             self.cur_surface_idx = (self.cur_surface_idx + 1) % pool.surfaces.len();
@@ -370,6 +374,90 @@ impl D3D12VideoDecoder {
         self.cur_surface_idx = (self.cur_surface_idx + 1) % pool.surfaces.len();
         Ok(())
     }
+
+    fn decode_vp9_packet(&mut self, packet: &Packet) -> Result<(), HwError> {
+        let frames = poppy_vp9::superframe::parse_superframe_frames(&packet.data)
+            .unwrap_or_else(|_| vec![&packet.data[..]]);
+
+        for frame_data in frames {
+            if let Ok(hdr) = poppy_vp9::header::Vp9FrameHeader::parse(frame_data, None) {
+                if hdr.show_existing_frame {
+                    continue;
+                }
+                self.ensure_pool(hdr.width, hdr.height, hdr.bit_depth >= 10)?;
+                if let Some(pool) = &self.pool {
+                    let target_surface = &pool.surfaces[self.cur_surface_idx];
+                    let dxgi_handle = pool.export_shared_handle(target_surface.id);
+                    let pixel_format = if hdr.bit_depth >= 10 {
+                        PixelFormat::P010
+                    } else {
+                        PixelFormat::Nv12
+                    };
+
+                    self.output_queue.push_back(DecodedFrame {
+                        pts: packet.pts.or(Some(packet.dts)),
+                        width: hdr.width,
+                        height: hdr.height,
+                        pixel_format,
+                        surface_id: target_surface.id,
+                        data: None,
+                        interlace_mode: InterlaceMode::Progressive,
+                        dmabuf: None,
+                        dxgi_handle,
+                        cv_pixel_buffer: None,
+                        is_concealed: false,
+                    });
+                    self.cur_surface_idx = (self.cur_surface_idx + 1) % pool.surfaces.len();
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn decode_av1_packet(&mut self, packet: &Packet) -> Result<(), HwError> {
+        if let Ok(obus) = poppy_av1::obu::split_obus(&packet.data) {
+            let mut width = 1920;
+            let mut height = 1080;
+            let mut is_10bit = false;
+
+            for obu in &obus {
+                if obu.header.obu_type == poppy_av1::obu::ObuType::SequenceHeader
+                    && let Ok(seq) = poppy_av1::sequence_header::SequenceHeader::parse(obu.payload)
+                {
+                    width = seq.max_frame_width;
+                    height = seq.max_frame_height;
+                    is_10bit = seq.high_bitdepth;
+                }
+            }
+
+            self.ensure_pool(width, height, is_10bit)?;
+            if let Some(pool) = &self.pool {
+                let target_surface = &pool.surfaces[self.cur_surface_idx];
+                let dxgi_handle = pool.export_shared_handle(target_surface.id);
+                let pixel_format = if is_10bit {
+                    PixelFormat::P010
+                } else {
+                    PixelFormat::Nv12
+                };
+
+                self.output_queue.push_back(DecodedFrame {
+                    pts: packet.pts.or(Some(packet.dts)),
+                    width,
+                    height,
+                    pixel_format,
+                    surface_id: target_surface.id,
+                    data: None,
+                    interlace_mode: InterlaceMode::Progressive,
+                    dmabuf: None,
+                    dxgi_handle,
+                    cv_pixel_buffer: None,
+                    is_concealed: false,
+                });
+                self.cur_surface_idx = (self.cur_surface_idx + 1) % pool.surfaces.len();
+            }
+        }
+        Ok(())
+    }
 }
 
 impl HwDecoder for D3D12VideoDecoder {
@@ -377,6 +465,8 @@ impl HwDecoder for D3D12VideoDecoder {
         match self.codec {
             CodecId::H264 => self.decode_h264_packet(packet),
             CodecId::Hevc => self.decode_hevc_packet(packet),
+            CodecId::Vp9 => self.decode_vp9_packet(packet),
+            CodecId::Av1 => self.decode_av1_packet(packet),
             _ => Ok(()),
         }
     }
