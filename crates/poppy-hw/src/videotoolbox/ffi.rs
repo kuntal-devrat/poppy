@@ -207,6 +207,11 @@ pub struct VtFunctions {
         unsafe extern "C" fn(pixel_buffer: CVPixelBufferRef) -> IOSurfaceRef,
     pub cv_pixel_buffer_get_pixel_format_type:
         unsafe extern "C" fn(pixel_buffer: CVPixelBufferRef) -> u32,
+
+    pub k_cf_type_dictionary_key_callbacks: *const c_void,
+    pub k_cf_type_dictionary_value_callbacks: *const c_void,
+    pub k_cv_pixel_buffer_pixel_format_type_key: *const c_void,
+    pub k_cv_pixel_buffer_io_surface_properties_key: *const c_void,
 }
 
 // SAFETY: The function pointers point to system framework functions that are
@@ -380,6 +385,32 @@ impl VtFunctions {
                 cv_handle,
                 "CVPixelBufferGetPixelFormatType"
             ),
+
+            k_cf_type_dictionary_key_callbacks: unsafe {
+                libc::dlsym(cf_handle, c"kCFTypeDictionaryKeyCallBacks".as_ptr())
+            },
+            k_cf_type_dictionary_value_callbacks: unsafe {
+                libc::dlsym(cf_handle, c"kCFTypeDictionaryValueCallBacks".as_ptr())
+            },
+            k_cv_pixel_buffer_pixel_format_type_key: {
+                let p =
+                    unsafe { libc::dlsym(cv_handle, c"kCVPixelBufferPixelFormatTypeKey".as_ptr()) };
+                if !p.is_null() {
+                    unsafe { *(p as *const *const c_void) }
+                } else {
+                    std::ptr::null()
+                }
+            },
+            k_cv_pixel_buffer_io_surface_properties_key: {
+                let p = unsafe {
+                    libc::dlsym(cv_handle, c"kCVPixelBufferIOSurfacePropertiesKey".as_ptr())
+                };
+                if !p.is_null() {
+                    unsafe { *(p as *const *const c_void) }
+                } else {
+                    std::ptr::null()
+                }
+            },
         })
     }
 }

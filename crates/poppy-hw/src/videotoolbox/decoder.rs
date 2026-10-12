@@ -149,6 +149,11 @@ impl VideoToolboxDecoder {
             )));
         }
 
+        if !self.format_desc.is_null() {
+            unsafe {
+                (self.funcs.cf_release)(self.format_desc as CFTypeRef);
+            }
+        }
         self.format_desc = format_desc;
         self.create_session()?;
         Ok(())
@@ -212,6 +217,11 @@ impl VideoToolboxDecoder {
             )));
         }
 
+        if !self.format_desc.is_null() {
+            unsafe {
+                (self.funcs.cf_release)(self.format_desc as CFTypeRef);
+            }
+        }
         self.format_desc = format_desc;
         self.create_session()?;
         Ok(())
@@ -240,6 +250,9 @@ impl VideoToolboxDecoder {
             self.callback_refcon = ptr::null_mut();
         }
 
+        // Build destination pixel buffer attributes dictionary
+        let dest_attrs = unsafe { self.create_dest_image_buffer_attrs() };
+
         // Set up output callback
         let queue = Arc::clone(&self.output_queue);
         let queue_raw = Arc::into_raw(queue) as *mut c_void;
@@ -255,11 +268,17 @@ impl VideoToolboxDecoder {
                 ptr::null(), // kCFAllocatorDefault
                 self.format_desc,
                 ptr::null(), // videoDecoderSpecification
-                ptr::null(), // destinationImageBufferAttributes (default)
+                dest_attrs as CFDictionaryRef,
                 &callback_record as *const _ as *const _,
                 &mut session,
             )
         };
+
+        if !dest_attrs.is_null() {
+            unsafe {
+                (self.funcs.cf_release)(dest_attrs as CFTypeRef);
+            }
+        }
 
         if status != NO_ERR || session.is_null() {
             if !self.callback_refcon.is_null() {
@@ -275,6 +294,66 @@ impl VideoToolboxDecoder {
 
         self.session = session;
         Ok(())
+    }
+
+    unsafe fn create_dest_image_buffer_attrs(&self) -> CFMutableDictionaryRef {
+        let key_cbs = self.funcs.k_cf_type_dictionary_key_callbacks;
+        let val_cbs = self.funcs.k_cf_type_dictionary_value_callbacks;
+        let dict =
+            unsafe { (self.funcs.cf_dictionary_create_mutable)(ptr::null(), 2, key_cbs, val_cbs) };
+        if dict.is_null() {
+            return ptr::null_mut();
+        }
+
+        // Set pixel format type key to NV12 or P010
+        if !self.funcs.k_cv_pixel_buffer_pixel_format_type_key.is_null() {
+            let pf = if self.is_10bit {
+                K_CV_PIXEL_FORMAT_TYPE_420_YP_CB_CR10_BI_PLANAR_VIDEO_RANGE
+            } else {
+                K_CV_PIXEL_FORMAT_TYPE_420_YP_CB_CR8_BI_PLANAR_VIDEO_RANGE
+            };
+            let pf_i32 = pf as i32;
+            let pf_num = unsafe {
+                (self.funcs.cf_number_create)(
+                    ptr::null(),
+                    K_CF_NUMBER_SI_NT32_TYPE,
+                    &pf_i32 as *const i32 as *const c_void,
+                )
+            };
+            if !pf_num.is_null() {
+                unsafe {
+                    (self.funcs.cf_dictionary_set_value)(
+                        dict,
+                        self.funcs.k_cv_pixel_buffer_pixel_format_type_key,
+                        pf_num,
+                    );
+                    (self.funcs.cf_release)(pf_num as CFTypeRef);
+                }
+            }
+        }
+
+        // Set IOSurface properties key (empty dict tells VT to back pixel buffers with IOSurface)
+        if !self
+            .funcs
+            .k_cv_pixel_buffer_io_surface_properties_key
+            .is_null()
+        {
+            let io_dict = unsafe {
+                (self.funcs.cf_dictionary_create_mutable)(ptr::null(), 0, key_cbs, val_cbs)
+            };
+            if !io_dict.is_null() {
+                unsafe {
+                    (self.funcs.cf_dictionary_set_value)(
+                        dict,
+                        self.funcs.k_cv_pixel_buffer_io_surface_properties_key,
+                        io_dict as *const c_void,
+                    );
+                    (self.funcs.cf_release)(io_dict as CFTypeRef);
+                }
+            }
+        }
+
+        dict
     }
 
     /// Submit a compressed packet (Annex-B or AVCC/HVCC length-prefixed) to the decoder.
@@ -560,11 +639,15 @@ unsafe fn read_pixel_buffer_data(
     let y_height = unsafe { (funcs.cv_pixel_buffer_get_height_of_plane)(pixel_buffer, 0) };
 
     if !y_base.is_null() && y_stride > 0 && y_height > 0 {
-        let row_bytes = (width as usize) * bytes_per_component;
+        let expected_row = (width as usize) * bytes_per_component;
+        let row_bytes = expected_row.min(y_stride);
         for row in 0..y_height.min(height as usize) {
             let src = unsafe { y_base.add(row * y_stride) };
             let slice = unsafe { std::slice::from_raw_parts(src, row_bytes) };
             data.extend_from_slice(slice);
+            if row_bytes < expected_row {
+                data.resize(data.len() + (expected_row - row_bytes), 0);
+            }
         }
     }
 
@@ -574,11 +657,15 @@ unsafe fn read_pixel_buffer_data(
     let uv_height = unsafe { (funcs.cv_pixel_buffer_get_height_of_plane)(pixel_buffer, 1) };
 
     if !uv_base.is_null() && uv_stride > 0 && uv_height > 0 {
-        let row_bytes = (width as usize) * bytes_per_component;
+        let expected_row = (width as usize) * bytes_per_component;
+        let row_bytes = expected_row.min(uv_stride);
         for row in 0..uv_height.min((height as usize) / 2) {
             let src = unsafe { uv_base.add(row * uv_stride) };
             let slice = unsafe { std::slice::from_raw_parts(src, row_bytes) };
             data.extend_from_slice(slice);
+            if row_bytes < expected_row {
+                data.resize(data.len() + (expected_row - row_bytes), 0);
+            }
         }
     }
 
