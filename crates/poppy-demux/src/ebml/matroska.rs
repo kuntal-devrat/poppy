@@ -4,7 +4,9 @@ use std::fs::File;
 use std::path::Path;
 
 use bytes::Bytes;
-use poppy_core::codec::{AudioConfig, Av1CRecord, AvcCRecord, CodecConfig, CodecId, HvcCRecord};
+use poppy_core::codec::{
+    AudioConfig, Av1CRecord, AvcCRecord, CodecConfig, CodecId, HvcCRecord, VpcCRecord,
+};
 use poppy_core::{Packet, StreamInfo, TimeBase};
 
 use super::element::{EbmlIter, read_uint, read_utf8};
@@ -181,9 +183,14 @@ impl MatroskaDemuxer {
                                             Av1CRecord::parse(entry_elem.payload)
                                         {
                                             codec_config = CodecConfig::Av1(av1c);
+                                        } else if let Ok(vpcc) =
+                                            VpcCRecord::parse(entry_elem.payload)
+                                        {
+                                            codec_config = CodecConfig::Vp9(vpcc);
                                         } else {
-                                            codec_private_raw =
-                                                Some(Bytes::copy_from_slice(entry_elem.payload));
+                                            codec_private_raw = Some(
+                                                bytes::Bytes::copy_from_slice(entry_elem.payload),
+                                            );
                                         }
                                     }
                                     ID_VIDEO_SETTINGS => {
@@ -262,6 +269,21 @@ impl MatroskaDemuxer {
                             }
 
                             let codec_id = CodecId::from_matroska_codec_id(&codec_str);
+                            if codec_id == CodecId::Vp9
+                                && matches!(codec_config, CodecConfig::Unknown)
+                            {
+                                codec_config = CodecConfig::Vp9(VpcCRecord {
+                                    profile: 0,
+                                    level: 0,
+                                    bit_depth: 8,
+                                    chroma_subsampling: 1,
+                                    video_full_range_flag: false,
+                                    colour_primaries: 1,
+                                    transfer_characteristics: 1,
+                                    matrix_coefficients: 1,
+                                    raw: bytes::Bytes::new(),
+                                });
+                            }
                             tracks.push(MatroskaTrack {
                                 track_num,
                                 track_type,

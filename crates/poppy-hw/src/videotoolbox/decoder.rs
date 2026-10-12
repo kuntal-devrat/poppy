@@ -36,7 +36,7 @@ pub struct VideoToolboxDecoder {
 
 impl VideoToolboxDecoder {
     pub fn new(codec: CodecId) -> Result<Self, HwError> {
-        if codec != CodecId::H264 && codec != CodecId::Hevc {
+        if codec != CodecId::H264 && codec != CodecId::Hevc && codec != CodecId::Vp9 {
             return Err(HwError::UnsupportedCodec);
         }
         Ok(Self {

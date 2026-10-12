@@ -26,6 +26,10 @@ pub const VA_PROFILE_H264_HIGH: VAProfile = 7;
 pub const VA_PROFILE_H264_CONSTRAINED_BASELINE: VAProfile = 21;
 pub const VA_PROFILE_HEVC_MAIN: VAProfile = 16;
 pub const VA_PROFILE_HEVC_MAIN10: VAProfile = 17;
+pub const VA_PROFILE_VP9_PROFILE0: VAProfile = 19;
+pub const VA_PROFILE_VP9_PROFILE1: VAProfile = 20;
+pub const VA_PROFILE_VP9_PROFILE2: VAProfile = 21;
+pub const VA_PROFILE_VP9_PROFILE3: VAProfile = 22;
 pub const VA_PROFILE_AV1_PROFILE0: VAProfile = 32;
 pub const VA_PROFILE_AV1_PROFILE1: VAProfile = 33;
 
@@ -426,6 +430,68 @@ impl Default for VASliceParameterBufferAV1 {
     }
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct VASegmentParameterVP9 {
+    pub segment_flags: u16,
+    pub filter_level: [[u8; 2]; 4],
+    pub luma_ac_quant_scale: i16,
+    pub luma_dc_quant_scale: i16,
+    pub chroma_ac_quant_scale: i16,
+    pub chroma_dc_quant_scale: i16,
+    pub pad: u16,
+    pub va_reserved: [u32; 4],
+}
+
+impl Default for VASegmentParameterVP9 {
+    fn default() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct VADecPictureParameterBufferVP9 {
+    pub frame_width: u16,
+    pub frame_height: u16,
+    pub reference_frames: [VASurfaceID; 8],
+    pub pic_fields: u32,
+    pub filter_level: u8,
+    pub sharpness_level: u8,
+    pub log2_tile_rows: u8,
+    pub log2_tile_columns: u8,
+    pub frame_header_length_in_bytes: u8,
+    pub pad: u8,
+    pub first_partition_size: u16,
+    pub mb_segment_tree_probs: [u8; 7],
+    pub segment_pred_probs: [u8; 3],
+    pub profile: u8,
+    pub bit_depth: u8,
+    pub va_reserved: [u32; 8],
+}
+
+impl Default for VADecPictureParameterBufferVP9 {
+    fn default() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct VASliceParameterBufferVP9 {
+    pub slice_data_size: u32,
+    pub slice_data_offset: u32,
+    pub slice_data_flag: u32,
+    pub seg_param: [VASegmentParameterVP9; 8],
+    pub va_reserved: [u32; 4],
+}
+
+impl Default for VASliceParameterBufferVP9 {
+    fn default() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -678,6 +744,48 @@ mod tests {
         assert_eq!(offset_of!(VASliceParameterBufferAV1, slice_data_flag), 8);
         assert_eq!(offset_of!(VASliceParameterBufferAV1, tile_row), 12);
         assert_eq!(offset_of!(VASliceParameterBufferAV1, tile_column), 14);
+    }
+
+    #[test]
+    fn test_vp9_struct_sizes() {
+        use std::mem::offset_of;
+        assert_eq!(std::mem::size_of::<VASegmentParameterVP9>(), 36);
+        assert_eq!(std::mem::size_of::<VADecPictureParameterBufferVP9>(), 92);
+        assert_eq!(std::mem::size_of::<VASliceParameterBufferVP9>(), 316);
+
+        assert_eq!(offset_of!(VADecPictureParameterBufferVP9, frame_width), 0);
+        assert_eq!(
+            offset_of!(VADecPictureParameterBufferVP9, reference_frames),
+            4
+        );
+        assert_eq!(offset_of!(VADecPictureParameterBufferVP9, pic_fields), 36);
+        assert_eq!(offset_of!(VADecPictureParameterBufferVP9, filter_level), 40);
+        assert_eq!(
+            offset_of!(VADecPictureParameterBufferVP9, first_partition_size),
+            46
+        );
+        assert_eq!(
+            offset_of!(VADecPictureParameterBufferVP9, mb_segment_tree_probs),
+            48
+        );
+        assert_eq!(
+            offset_of!(VADecPictureParameterBufferVP9, segment_pred_probs),
+            55
+        );
+        assert_eq!(offset_of!(VADecPictureParameterBufferVP9, profile), 58);
+        assert_eq!(offset_of!(VADecPictureParameterBufferVP9, bit_depth), 59);
+        assert_eq!(offset_of!(VADecPictureParameterBufferVP9, va_reserved), 60);
+
+        assert_eq!(offset_of!(VASegmentParameterVP9, segment_flags), 0);
+        assert_eq!(offset_of!(VASegmentParameterVP9, filter_level), 2);
+        assert_eq!(offset_of!(VASegmentParameterVP9, luma_ac_quant_scale), 10);
+        assert_eq!(offset_of!(VASegmentParameterVP9, luma_dc_quant_scale), 12);
+        assert_eq!(offset_of!(VASegmentParameterVP9, chroma_ac_quant_scale), 14);
+        assert_eq!(offset_of!(VASegmentParameterVP9, chroma_dc_quant_scale), 16);
+
+        assert_eq!(offset_of!(VASliceParameterBufferVP9, slice_data_size), 0);
+        assert_eq!(offset_of!(VASliceParameterBufferVP9, seg_param), 12);
+        assert_eq!(offset_of!(VASliceParameterBufferVP9, va_reserved), 300);
     }
 }
 

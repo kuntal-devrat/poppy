@@ -10,7 +10,7 @@
 pub mod vaapi;
 
 #[cfg(target_os = "linux")]
-pub use vaapi::{VaapiAv1Decoder, VaapiH264Decoder, VaapiHevcDecoder};
+pub use vaapi::{VaapiAv1Decoder, VaapiH264Decoder, VaapiHevcDecoder, VaapiVp9Decoder};
 
 pub mod d3d12;
 pub use d3d12::D3D12VideoDecoder;
@@ -160,6 +160,7 @@ pub fn create_decoder(codec_id: CodecId) -> Result<Box<dyn HwDecoder>, HwError> 
             CodecId::H264 => Ok(Box::new(VaapiH264Decoder::new()?)),
             CodecId::Hevc => Ok(Box::new(VaapiHevcDecoder::new(false)?)),
             CodecId::Av1 => Ok(Box::new(VaapiAv1Decoder::new(false)?)),
+            CodecId::Vp9 => Ok(Box::new(VaapiVp9Decoder::new(false)?)),
             _ => Err(HwError::UnsupportedCodec),
         }
     }

@@ -38,7 +38,7 @@ pub struct D3D12VideoDecoder {
 
 impl D3D12VideoDecoder {
     pub fn new(codec: CodecId) -> Result<Self, HwError> {
-        if codec != CodecId::H264 && codec != CodecId::Hevc {
+        if codec != CodecId::H264 && codec != CodecId::Hevc && codec != CodecId::Vp9 {
             return Err(HwError::UnsupportedCodec);
         }
         let device = D3D12VideoDevice::open()?;

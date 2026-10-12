@@ -98,6 +98,8 @@ pub enum CodecConfig {
     Hevc(HvcCRecord),
     /// AV1 configuration from the `av1C` box.
     Av1(Av1CRecord),
+    /// VP9 configuration from the `vpcC` box.
+    Vp9(VpcCRecord),
     /// Audio stream configuration.
     Audio(AudioConfig),
     /// Unknown or not yet parsed.
@@ -507,6 +509,88 @@ impl Av1CRecord {
     }
 }
 
+/// Errors when parsing a `vpcC` record.
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
+pub enum VpcCParseError {
+    #[error("vpcC data too short: need {need} bytes, have {have}")]
+    TooShort { need: usize, have: usize },
+    #[error("unsupported vpcC version: {0} (expected 1)")]
+    UnsupportedVersion(u8),
+}
+
+/// Parsed contents of the `vpcC` box (VP Codec ISO Media File Format Binding, §3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VpcCRecord {
+    pub profile: u8,
+    pub level: u8,
+    pub bit_depth: u8,
+    pub chroma_subsampling: u8,
+    pub video_full_range_flag: bool,
+    pub colour_primaries: u8,
+    pub transfer_characteristics: u8,
+    pub matrix_coefficients: u8,
+    pub raw: Bytes,
+}
+
+impl VpcCRecord {
+    /// Return the raw byte representation of the vpcC record.
+    #[inline]
+    pub fn raw_data(&self) -> &[u8] {
+        &self.raw
+    }
+
+    /// Parses a `vpcC` box payload from raw bytes (supports both FullBox and raw record format).
+    pub fn parse(data: &[u8]) -> Result<Self, VpcCParseError> {
+        let (offset, _version) = if data.len() >= 10 && (data[0] == 0 || data[0] == 1) {
+            // FullBox: 1 byte version + 3 bytes flags
+            (4, data[0])
+        } else if data.len() >= 6 {
+            // Direct record
+            (0, 1)
+        } else {
+            return Err(VpcCParseError::TooShort {
+                need: 6,
+                have: data.len(),
+            });
+        };
+
+        if data.len() < offset + 6 {
+            return Err(VpcCParseError::TooShort {
+                need: offset + 6,
+                have: data.len(),
+            });
+        }
+
+        let profile = data[offset];
+        let level = data[offset + 1];
+        let byte2 = data[offset + 2];
+        let bit_depth = (byte2 >> 4) & 0x0F;
+        let chroma_subsampling = (byte2 >> 1) & 0x07;
+        let video_full_range_flag = (byte2 & 0x01) != 0;
+
+        let colour_primaries = data[offset + 3];
+        let transfer_characteristics = data[offset + 4];
+        let matrix_coefficients = data[offset + 5];
+
+        Ok(Self {
+            profile,
+            level,
+            bit_depth,
+            chroma_subsampling,
+            video_full_range_flag,
+            colour_primaries,
+            transfer_characteristics,
+            matrix_coefficients,
+            raw: Bytes::copy_from_slice(data),
+        })
+    }
+
+    /// Returns `true` if this VP9 stream has 10-bit or 12-bit depth.
+    pub fn is_10bit(&self) -> bool {
+        self.bit_depth >= 10 || self.profile >= 2
+    }
+}
+
 /// Audio stream configuration extracted from the container.
 #[derive(Debug, Clone)]
 pub struct AudioConfig {
@@ -644,5 +728,26 @@ mod tests {
         assert_eq!(record.seq_profile, 0);
         assert!(!record.is_10bit());
         assert_eq!(record.config_obus.len(), 2);
+    }
+
+    #[test]
+    fn parse_vpcc_basic() {
+        let data: Vec<u8> = vec![
+            0x01, 0x00, 0x00, 0x00, // FullBox version 1, flags 0
+            0x00, // profile 0
+            0x1F, // level 3.1 (31)
+            0x82, // bit_depth=8 (1000b), subsampling=420 (001b), full_range=0 (0b)
+            0x01, // primaries = bt709
+            0x01, // transfer = bt709
+            0x01, // matrix = bt709
+        ];
+
+        let record = VpcCRecord::parse(&data).expect("should parse vpcC");
+        assert_eq!(record.profile, 0);
+        assert_eq!(record.level, 31);
+        assert_eq!(record.bit_depth, 8);
+        assert_eq!(record.chroma_subsampling, 1);
+        assert!(!record.video_full_range_flag);
+        assert!(!record.is_10bit());
     }
 }

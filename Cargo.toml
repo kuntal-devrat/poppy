@@ -6,6 +6,7 @@ members = [
     "crates/poppy-h264",
     "crates/poppy-hevc",
     "crates/poppy-av1",
+    "crates/poppy-vp9",
     "crates/poppy-hw",
     "crates/poppy-render",
     "crates/poppy",
@@ -26,6 +27,7 @@ poppy-demux = { path = "crates/poppy-demux" }
 poppy-h264 = { path = "crates/poppy-h264" }
 poppy-hevc = { path = "crates/poppy-hevc" }
 poppy-av1 = { path = "crates/poppy-av1" }
+poppy-vp9 = { path = "crates/poppy-vp9" }
 poppy-hw = { path = "crates/poppy-hw" }
 poppy-render = { path = "crates/poppy-render" }
 poppy = { path = "crates/poppy" }

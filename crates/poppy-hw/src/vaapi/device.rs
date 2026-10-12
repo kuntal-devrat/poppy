@@ -47,6 +47,20 @@ impl VaDevice {
         Self::open_auto_for_profiles(&[VA_PROFILE_AV1_PROFILE0, VA_PROFILE_AV1_PROFILE1])
     }
 
+    /// Discovers an available DRM render node and initializes VA-API for VP9 VLD decoding.
+    pub fn open_auto_vp9(is_10bit: bool) -> Result<Self, HwError> {
+        if is_10bit {
+            Self::open_auto_for_profiles(&[VA_PROFILE_VP9_PROFILE2, VA_PROFILE_VP9_PROFILE3])
+        } else {
+            Self::open_auto_for_profiles(&[
+                VA_PROFILE_VP9_PROFILE0,
+                VA_PROFILE_VP9_PROFILE1,
+                VA_PROFILE_VP9_PROFILE2,
+                VA_PROFILE_VP9_PROFILE3,
+            ])
+        }
+    }
+
     /// Discovers an available DRM render node matching one of the desired profiles.
     pub fn open_auto_for_profiles(desired_profiles: &[VAProfile]) -> Result<Self, HwError> {
         let va = VaApi::load().map_err(HwError::DeviceInitFailed)?;

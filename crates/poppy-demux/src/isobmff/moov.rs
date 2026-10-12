@@ -3,7 +3,9 @@
 //! Parses `moov` → `trak` → `mdia` → `minf` → `stbl` to extract stream metadata,
 //! codec configuration (`avcC`, etc.), and reconstructed sample tables.
 
-use poppy_core::codec::{AudioConfig, Av1CRecord, AvcCRecord, CodecConfig, CodecId, HvcCRecord};
+use poppy_core::codec::{
+    AudioConfig, Av1CRecord, AvcCRecord, CodecConfig, CodecId, HvcCRecord, VpcCRecord,
+};
 use poppy_core::{StreamInfo, TimeBase};
 
 use super::box_reader::BoxHeader;
@@ -427,6 +429,10 @@ fn parse_stsd(
                         && let Ok(av1c) = Av1CRecord::parse(c_body)
                     {
                         codec_config = CodecConfig::Av1(av1c);
+                    } else if &c_header.box_type == b"vpcC"
+                        && let Ok(vpcc) = VpcCRecord::parse(c_body)
+                    {
+                        codec_config = CodecConfig::Vp9(vpcc);
                     }
                 }
             } else if entry_payload.len() >= 28 {

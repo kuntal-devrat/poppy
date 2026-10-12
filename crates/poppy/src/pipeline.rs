@@ -9,7 +9,7 @@ use poppy_core::{CodecId, Packet, StreamInfo, codec::CodecConfig};
 use poppy_demux::{Demuxer, MatroskaDemuxer, Mp4Demuxer};
 use poppy_hw::{DecodedFrame, HwDecoder};
 #[cfg(target_os = "linux")]
-use poppy_hw::{VaapiAv1Decoder, VaapiH264Decoder, VaapiHevcDecoder};
+use poppy_hw::{VaapiAv1Decoder, VaapiH264Decoder, VaapiHevcDecoder, VaapiVp9Decoder};
 
 use crate::error::PoppyError;
 
@@ -79,7 +79,10 @@ impl MediaStream {
         } else {
             let mut idx = 0;
             for (i, s) in demuxer.streams().iter().enumerate() {
-                if matches!(s.codec, CodecId::H264 | CodecId::Hevc | CodecId::Av1) {
+                if matches!(
+                    s.codec,
+                    CodecId::H264 | CodecId::Hevc | CodecId::Av1 | CodecId::Vp9
+                ) {
                     idx = i;
                     break;
                 }
@@ -200,51 +203,77 @@ impl MediaStream {
                 } else {
                     None
                 }
+            } else if stream_info.codec == CodecId::Vp9 {
+                let is_10bit =
+                    if let poppy_core::codec::CodecConfig::Vp9(vpcc) = &stream_info.config {
+                        vpcc.is_10bit()
+                    } else {
+                        false
+                    };
+
+                if let Ok(mut dec) = VaapiVp9Decoder::new(is_10bit) {
+                    if let poppy_core::codec::CodecConfig::Vp9(vpcc) = &stream_info.config {
+                        let _ = dec.set_extradata(&vpcc.raw);
+                    }
+                    Some(Box::new(dec) as Box<dyn HwDecoder>)
+                } else {
+                    None
+                }
             } else {
                 None
             };
 
             #[cfg(target_os = "windows")]
-            let decoder: Option<Box<dyn HwDecoder>> =
-                if stream_info.codec == CodecId::H264 || stream_info.codec == CodecId::Hevc {
-                    if let Ok(mut dec) = poppy_hw::D3D12VideoDecoder::new(stream_info.codec) {
-                        match &stream_info.config {
-                            poppy_core::codec::CodecConfig::H264(avcc) => {
-                                let _ = dec.set_extradata(&avcc.raw);
-                            }
-                            poppy_core::codec::CodecConfig::Hevc(hvcc) => {
-                                let _ = dec.set_extradata(&hvcc.raw);
-                            }
-                            _ => {}
+            let decoder: Option<Box<dyn HwDecoder>> = if stream_info.codec == CodecId::H264
+                || stream_info.codec == CodecId::Hevc
+                || stream_info.codec == CodecId::Vp9
+            {
+                if let Ok(mut dec) = poppy_hw::D3D12VideoDecoder::new(stream_info.codec) {
+                    match &stream_info.config {
+                        poppy_core::codec::CodecConfig::H264(avcc) => {
+                            let _ = dec.set_extradata(&avcc.raw);
                         }
-                        Some(Box::new(dec) as Box<dyn HwDecoder>)
-                    } else {
-                        None
+                        poppy_core::codec::CodecConfig::Hevc(hvcc) => {
+                            let _ = dec.set_extradata(&hvcc.raw);
+                        }
+                        poppy_core::codec::CodecConfig::Vp9(vpcc) => {
+                            let _ = dec.set_extradata(&vpcc.raw);
+                        }
+                        _ => {}
                     }
+                    Some(Box::new(dec) as Box<dyn HwDecoder>)
                 } else {
                     None
-                };
+                }
+            } else {
+                None
+            };
 
             #[cfg(target_os = "macos")]
-            let decoder: Option<Box<dyn HwDecoder>> =
-                if stream_info.codec == CodecId::H264 || stream_info.codec == CodecId::Hevc {
-                    if let Ok(mut dec) = poppy_hw::VideoToolboxDecoder::new(stream_info.codec) {
-                        match &stream_info.config {
-                            poppy_core::codec::CodecConfig::H264(avcc) => {
-                                let _ = dec.set_extradata(&avcc.raw);
-                            }
-                            poppy_core::codec::CodecConfig::Hevc(hvcc) => {
-                                let _ = dec.set_extradata(&hvcc.raw);
-                            }
-                            _ => {}
+            let decoder: Option<Box<dyn HwDecoder>> = if stream_info.codec == CodecId::H264
+                || stream_info.codec == CodecId::Hevc
+                || stream_info.codec == CodecId::Vp9
+            {
+                if let Ok(mut dec) = poppy_hw::VideoToolboxDecoder::new(stream_info.codec) {
+                    match &stream_info.config {
+                        poppy_core::codec::CodecConfig::H264(avcc) => {
+                            let _ = dec.set_extradata(&avcc.raw);
                         }
-                        Some(Box::new(dec) as Box<dyn HwDecoder>)
-                    } else {
-                        None
+                        poppy_core::codec::CodecConfig::Hevc(hvcc) => {
+                            let _ = dec.set_extradata(&hvcc.raw);
+                        }
+                        poppy_core::codec::CodecConfig::Vp9(vpcc) => {
+                            let _ = dec.set_extradata(&vpcc.raw);
+                        }
+                        _ => {}
                     }
+                    Some(Box::new(dec) as Box<dyn HwDecoder>)
                 } else {
                     None
-                };
+                }
+            } else {
+                None
+            };
 
             #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
             let decoder: Option<Box<dyn HwDecoder>> = None;

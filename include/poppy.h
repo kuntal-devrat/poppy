@@ -33,6 +33,20 @@ extern "C" {
 #define POPPY_ERR_PANIC           -8
 
 /* ========================================================================= */
+/* Codec Identification Constants                                            */
+/* ========================================================================= */
+
+#define POPPY_CODEC_UNKNOWN        0
+#define POPPY_CODEC_H264           1
+#define POPPY_CODEC_HEVC           2
+#define POPPY_CODEC_AV1            3
+#define POPPY_CODEC_VP9            4
+#define POPPY_CODEC_AAC           10
+#define POPPY_CODEC_OPUS          11
+#define POPPY_CODEC_MP3           12
+#define POPPY_CODEC_FLAC          13
+
+/* ========================================================================= */
 /* Pixel Format Enums                                                        */
 /* ========================================================================= */
 

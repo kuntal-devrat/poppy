@@ -129,6 +129,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             println!("    Monochrome:        {}", av1c.monochrome);
                             println!("    Config OBUs Size:  {} byte(s)", av1c.config_obus.len());
                         }
+                        CodecConfig::Vp9(vpcc) => {
+                            println!("  VP9 Config:");
+                            println!("    Profile:           {}", vpcc.profile);
+                            println!("    Level:             {}", vpcc.level);
+                            println!(
+                                "    Bit Depth:         {}-bit {}",
+                                vpcc.bit_depth,
+                                if vpcc.is_10bit() {
+                                    "(10-bit HDR)"
+                                } else {
+                                    "(8-bit Standard)"
+                                }
+                            );
+                            println!("    Chroma Subsampling: {}", vpcc.chroma_subsampling);
+                            println!("    Full Range:        {}", vpcc.video_full_range_flag);
+                        }
                         CodecConfig::Audio(audio) => {
                             println!("  Audio Config:");
                             println!("    Sample Rate:       {} Hz", audio.sample_rate);
@@ -228,6 +244,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                         println!("    Monochrome:        {}", av1c.monochrome);
                         println!("    Config OBUs Size:  {} byte(s)", av1c.config_obus.len());
+                    }
+                    CodecConfig::Vp9(vpcc) => {
+                        println!("  VP9 Config:");
+                        println!("    Profile:           {}", vpcc.profile);
+                        println!("    Level:             {}", vpcc.level);
+                        println!(
+                            "    Bit Depth:         {}-bit {}",
+                            vpcc.bit_depth,
+                            if vpcc.is_10bit() {
+                                "(10-bit HDR)"
+                            } else {
+                                "(8-bit Standard)"
+                            }
+                        );
+                        println!("    Chroma Subsampling: {}", vpcc.chroma_subsampling);
+                        println!("    Full Range:        {}", vpcc.video_full_range_flag);
                     }
                     CodecConfig::Audio(audio) => {
                         println!("  Audio Config:");
@@ -360,6 +392,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             out_file.write_all(&av1c.config_obus)?;
                             total_bytes += av1c.config_obus.len();
                         }
+                        out_file.write_all(&packet.data)?;
+                        total_bytes += packet.data.len();
+                        packet_count += 1;
+                    }
+                }
+                CodecConfig::Vp9(_) => {
+                    while let Some(packet) = demuxer.read_packet()? {
+                        if packet.stream_index != target_stream_idx {
+                            continue;
+                        }
+
                         out_file.write_all(&packet.data)?;
                         total_bytes += packet.data.len();
                         packet_count += 1;
