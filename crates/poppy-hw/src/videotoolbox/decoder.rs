@@ -35,6 +35,7 @@ pub struct VideoToolboxDecoder {
     format_desc: CMVideoFormatDescriptionRef,
     funcs: &'static VtFunctions,
     output_queue: Arc<Mutex<OutputQueue>>,
+    callback_refcon: *mut c_void,
     pub width: u32,
     pub height: u32,
     pub is_10bit: bool,
@@ -66,6 +67,7 @@ impl VideoToolboxDecoder {
             output_queue: Arc::new(Mutex::new(OutputQueue {
                 frames: VecDeque::new(),
             })),
+            callback_refcon: ptr::null_mut(),
             width: 0,
             height: 0,
             is_10bit: false,
@@ -231,6 +233,12 @@ impl VideoToolboxDecoder {
             }
             self.session = ptr::null_mut();
         }
+        if !self.callback_refcon.is_null() {
+            unsafe {
+                let _ = Arc::from_raw(self.callback_refcon as *const Mutex<OutputQueue>);
+            }
+            self.callback_refcon = ptr::null_mut();
+        }
 
         // Build destination pixel buffer attributes dictionary:
         //   kCVPixelBufferPixelFormatTypeKey -> NV12 or P010
@@ -240,6 +248,7 @@ impl VideoToolboxDecoder {
         // Set up async output callback
         let queue = Arc::clone(&self.output_queue);
         let queue_raw = Arc::into_raw(queue) as *mut c_void;
+        self.callback_refcon = queue_raw;
         let callback_record = VTDecompressionOutputCallbackRecord {
             decompression_output_callback: Some(vt_output_callback),
             decompression_output_ref_con: queue_raw,
@@ -257,9 +266,6 @@ impl VideoToolboxDecoder {
             )
         };
 
-        // Re-acquire the Arc ownership so it stays alive
-        let _queue_arc = unsafe { Arc::from_raw(queue_raw as *const Mutex<OutputQueue>) };
-
         if !dest_attrs.is_null() {
             unsafe {
                 (self.funcs.cf_release)(dest_attrs as CFTypeRef);
@@ -267,6 +273,12 @@ impl VideoToolboxDecoder {
         }
 
         if status != NO_ERR || session.is_null() {
+            if !self.callback_refcon.is_null() {
+                unsafe {
+                    let _ = Arc::from_raw(self.callback_refcon as *const Mutex<OutputQueue>);
+                }
+                self.callback_refcon = ptr::null_mut();
+            }
             return Err(HwError::DeviceInitFailed(format!(
                 "VTDecompressionSessionCreate failed: OSStatus {status}"
             )));
@@ -441,11 +453,19 @@ impl Drop for VideoToolboxDecoder {
                 (self.funcs.vt_decompression_session_invalidate)(self.session);
                 (self.funcs.cf_release)(self.session as CFTypeRef);
             }
+            self.session = ptr::null_mut();
+        }
+        if !self.callback_refcon.is_null() {
+            unsafe {
+                let _ = Arc::from_raw(self.callback_refcon as *const Mutex<OutputQueue>);
+            }
+            self.callback_refcon = ptr::null_mut();
         }
         if !self.format_desc.is_null() {
             unsafe {
                 (self.funcs.cf_release)(self.format_desc as CFTypeRef);
             }
+            self.format_desc = ptr::null_mut();
         }
     }
 }
@@ -555,17 +575,15 @@ unsafe extern "C" fn vt_output_callback(
     };
 
     // Push to the shared output queue
-    // Safety: decompression_output_ref_con was created from Arc::into_raw;
-    // we must NOT drop the Arc here — just borrow it.
+    // Safety: decompression_output_ref_con was created from Arc::into_raw and is kept alive
+    // by VideoToolboxDecoder for the duration of the session. We borrow it without mutating
+    // the Arc refcount.
     let queue_ptr = decompression_output_ref_con as *const Mutex<OutputQueue>;
-    // Temporarily increment refcount, lock, push, decrement
-    unsafe {
-        let arc = Arc::from_raw(queue_ptr);
-        if let Ok(mut q) = arc.lock() {
+    if !queue_ptr.is_null() {
+        let queue_ref = unsafe { &*queue_ptr };
+        if let Ok(mut q) = queue_ref.lock() {
             q.frames.push_back(frame);
         }
-        // Leak the Arc back so it isn't dropped
-        let _ = Arc::into_raw(arc);
     }
 }
 

@@ -474,7 +474,7 @@ impl D3d12Functions {
     fn load_windows() -> Option<D3d12Functions> {
         // On Windows we use the winapi-style LoadLibraryW / GetProcAddress.
         // We declare them as extern "system" to call the real Win32 APIs.
-        extern "system" {
+        unsafe extern "system" {
             fn LoadLibraryW(lp_lib_file_name: *const u16) -> HMODULE;
             fn GetProcAddress(h_module: HMODULE, lp_proc_name: *const u8) -> *mut c_void;
         }

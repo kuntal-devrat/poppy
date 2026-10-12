@@ -175,7 +175,7 @@ impl OpenH264Lib {
 
             #[cfg(target_os = "windows")]
             unsafe {
-                extern "system" {
+                unsafe extern "system" {
                     fn LoadLibraryA(lpLibFileName: *const c_char) -> *mut c_void;
                     fn GetProcAddress(
                         hModule: *mut c_void,
