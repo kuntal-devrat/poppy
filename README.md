@@ -6,7 +6,7 @@
 
 **A modern, memory-safe media pipeline with zero-copy hardware acceleration.**
 
-[![Crates.io](https://img.shields.io/badge/crates.io-v0.5.0-orange.svg?style=flat-square)](https://crates.io/crates/poppy)
+[![Crates.io](https://img.shields.io/badge/crates.io-v0.5.5-orange.svg?style=flat-square)](https://crates.io/crates/poppy)
 [![Documentation](https://img.shields.io/badge/docs.rs-poppy-blue.svg?style=flat-square)](https://docs.rs/poppy)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg?style=flat-square)](#-license)
 [![Rust Edition](https://img.shields.io/badge/rustc-2024%20(1.85%2B)-red.svg?style=flat-square)](https://www.rust-lang.org)
@@ -44,7 +44,7 @@ Conventional multimedia libraries like FFmpeg and GStreamer are massive C codeba
 
 *Measured on an Intel® Core™ i7 with Intel® Iris® Xe Graphics (Linux 6.8, VA-API 1.20, Vulkan 1.3, 1080p 60fps bitstreams):*
 
-| Metric | FFmpeg (Software CPU) | FFmpeg (Hardware VA-API) | **Project Poppy (v0.5.0)** |
+| Metric | FFmpeg (Software CPU) | FFmpeg (Hardware VA-API) | **Project Poppy (v0.5.5)** |
 |---|:---:|:---:|:---:|
 | **H.264 Decode Throughput** | ~142 FPS | ~480 FPS | **653.3 FPS** 🚀 |
 | **HEVC (H.265) 10-bit Throughput** | ~85 FPS | ~610 FPS | **1248.4 FPS** ⚡ |
@@ -74,7 +74,7 @@ Add `poppy` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-poppy = "0.5.0"
+poppy = "0.5.5"
 tokio = { version = "1", features = ["full"] }
 futures-util = "0.3"
 ```
@@ -257,15 +257,15 @@ For complete technical specifications, see [`docs/ARCHITECTURE.md`](docs/ARCHITE
 
 | Crate | Purpose | Crates.io |
 |---|---|:---:|
-| [`poppy`](crates/poppy) | High-level facade, Tokio async stream, and C ABI (`libpoppy.so`) | [![Crates.io](https://img.shields.io/badge/poppy-0.5.0-orange.svg)](https://crates.io/crates/poppy) |
-| [`poppy-core`](crates/poppy-core) | Foundational types (`Packet`, `TimeBase`, `StreamInfo`, `PixelFormat`) | [![Crates.io](https://img.shields.io/badge/poppy--core-0.5.0-orange.svg)](https://crates.io/crates/poppy-core) |
-| [`poppy-demux`](crates/poppy-demux) | Pure safe-Rust MP4 and MKV container demuxers + Annex-B BSF | [![Crates.io](https://img.shields.io/badge/poppy--demux-0.5.0-orange.svg)](https://crates.io/crates/poppy-demux) |
-| [`poppy-h264`](crates/poppy-h264) | H.264 NAL, SPS, PPS, and slice header parser | [![Crates.io](https://img.shields.io/badge/poppy--h264-0.5.0-orange.svg)](https://crates.io/crates/poppy-h264) |
-| [`poppy-hevc`](crates/poppy-hevc) | HEVC / H.265 VPS, SPS, PPS, and 10-bit HDR slice parser | [![Crates.io](https://img.shields.io/badge/poppy--hevc-0.5.0-orange.svg)](https://crates.io/crates/poppy-hevc) |
-| [`poppy-av1`](crates/poppy-av1) | AV1 OBU, Sequence Header, and Frame Header parser | [![Crates.io](https://img.shields.io/badge/poppy--av1-0.5.0-orange.svg)](https://crates.io/crates/poppy-av1) |
-| [`poppy-hw`](crates/poppy-hw) | Cross-platform hardware decode HAL (VA-API, D3D12, VideoToolbox) | [![Crates.io](https://img.shields.io/badge/poppy--hw-0.5.0-orange.svg)](https://crates.io/crates/poppy-hw) |
-| [`poppy-render`](crates/poppy-render) | Zero-copy GPU bridges and WGSL color conversion shaders | [![Crates.io](https://img.shields.io/badge/poppy--render-0.5.0-orange.svg)](https://crates.io/crates/poppy-render) |
-| [`poppy-cli`](bins/poppy-cli) | Command-line inspector, elementary stream dumper, and player | [![Crates.io](https://img.shields.io/badge/poppy--cli-0.5.0-orange.svg)](https://crates.io/crates/poppy-cli) |
+| [`poppy`](crates/poppy) | High-level facade, Tokio async stream, and C ABI (`libpoppy.so`) | [![Crates.io](https://img.shields.io/badge/poppy-0.5.5-orange.svg)](https://crates.io/crates/poppy) |
+| [`poppy-core`](crates/poppy-core) | Foundational types (`Packet`, `TimeBase`, `StreamInfo`, `PixelFormat`) | [![Crates.io](https://img.shields.io/badge/poppy--core-0.5.5-orange.svg)](https://crates.io/crates/poppy-core) |
+| [`poppy-demux`](crates/poppy-demux) | Pure safe-Rust MP4 and MKV container demuxers + Annex-B BSF | [![Crates.io](https://img.shields.io/badge/poppy--demux-0.5.5-orange.svg)](https://crates.io/crates/poppy-demux) |
+| [`poppy-h264`](crates/poppy-h264) | H.264 NAL, SPS, PPS, and slice header parser | [![Crates.io](https://img.shields.io/badge/poppy--h264-0.5.5-orange.svg)](https://crates.io/crates/poppy-h264) |
+| [`poppy-hevc`](crates/poppy-hevc) | HEVC / H.265 VPS, SPS, PPS, and 10-bit HDR slice parser | [![Crates.io](https://img.shields.io/badge/poppy--hevc-0.5.5-orange.svg)](https://crates.io/crates/poppy-hevc) |
+| [`poppy-av1`](crates/poppy-av1) | AV1 OBU, Sequence Header, and Frame Header parser | [![Crates.io](https://img.shields.io/badge/poppy--av1-0.5.5-orange.svg)](https://crates.io/crates/poppy-av1) |
+| [`poppy-hw`](crates/poppy-hw) | Cross-platform hardware decode HAL (VA-API, D3D12, VideoToolbox) | [![Crates.io](https://img.shields.io/badge/poppy--hw-0.5.5-orange.svg)](https://crates.io/crates/poppy-hw) |
+| [`poppy-render`](crates/poppy-render) | Zero-copy GPU bridges and WGSL color conversion shaders | [![Crates.io](https://img.shields.io/badge/poppy--render-0.5.5-orange.svg)](https://crates.io/crates/poppy-render) |
+| [`poppy-cli`](bins/poppy-cli) | Command-line inspector, elementary stream dumper, and player | [![Crates.io](https://img.shields.io/badge/poppy--cli-0.5.5-orange.svg)](https://crates.io/crates/poppy-cli) |
 
 ---
 

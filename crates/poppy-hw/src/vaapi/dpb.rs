@@ -5,6 +5,7 @@
 
 use super::ffi::*;
 use poppy_core::InterlaceMode;
+use poppy_h264::RefPicListModification;
 
 /// A frame stored in the Decoded Picture Buffer.
 #[derive(Debug, Clone)]
@@ -157,7 +158,14 @@ impl Dpb {
     }
 
     /// Fill `RefPicList0[32]` for `VASliceParameterBufferH264` (P-slices and B-slices).
-    pub fn fill_ref_pic_list0(&self, cur_poc: i32, list: &mut [VAPictureH264; 32]) {
+    pub fn fill_ref_pic_list0(
+        &self,
+        cur_poc: i32,
+        cur_frame_num: u32,
+        max_frame_num: u32,
+        modifications: &[RefPicListModification],
+        list: &mut [VAPictureH264; 32],
+    ) {
         // H.264 §8.2.4.2: Short-term reference frames sorted by POC
         let mut short_terms: Vec<&DpbFrame> = self
             .frames
@@ -180,6 +188,41 @@ impl Dpb {
             }
         });
 
+        // Apply RPLR modifications (ITU-T H.264 §8.2.4.3)
+        if !modifications.is_empty() && max_frame_num > 0 {
+            let mut pic_num_pred = cur_frame_num as i32;
+            let mut ref_idx = 0usize;
+            for m in modifications {
+                match m.modification_of_pic_nums_idc {
+                    0 => {
+                        let diff = m.value as i32 + 1;
+                        pic_num_pred = (pic_num_pred - diff).rem_euclid(max_frame_num as i32);
+                        if let Some(pos) = short_terms
+                            .iter()
+                            .position(|f| (f.frame_num as i32) == pic_num_pred)
+                        {
+                            let frame = short_terms.remove(pos);
+                            short_terms.insert(ref_idx.min(short_terms.len()), frame);
+                            ref_idx += 1;
+                        }
+                    }
+                    1 => {
+                        let diff = m.value as i32 + 1;
+                        pic_num_pred = (pic_num_pred + diff).rem_euclid(max_frame_num as i32);
+                        if let Some(pos) = short_terms
+                            .iter()
+                            .position(|f| (f.frame_num as i32) == pic_num_pred)
+                        {
+                            let frame = short_terms.remove(pos);
+                            short_terms.insert(ref_idx.min(short_terms.len()), frame);
+                            ref_idx += 1;
+                        }
+                    }
+                    _ => break,
+                }
+            }
+        }
+
         for (i, slot) in list.iter_mut().enumerate() {
             if let Some(f) = short_terms.get(i) {
                 *slot = VAPictureH264 {
@@ -197,7 +240,14 @@ impl Dpb {
     }
 
     /// Fill `RefPicList1[32]` for `VASliceParameterBufferH264` (B-slices).
-    pub fn fill_ref_pic_list1(&self, cur_poc: i32, list: &mut [VAPictureH264; 32]) {
+    pub fn fill_ref_pic_list1(
+        &self,
+        cur_poc: i32,
+        cur_frame_num: u32,
+        max_frame_num: u32,
+        modifications: &[RefPicListModification],
+        list: &mut [VAPictureH264; 32],
+    ) {
         let mut short_terms: Vec<&DpbFrame> = self
             .frames
             .iter()
@@ -219,6 +269,41 @@ impl Dpb {
                 std::cmp::Ordering::Greater
             }
         });
+
+        // Apply RPLR modifications (ITU-T H.264 §8.2.4.3)
+        if !modifications.is_empty() && max_frame_num > 0 {
+            let mut pic_num_pred = cur_frame_num as i32;
+            let mut ref_idx = 0usize;
+            for m in modifications {
+                match m.modification_of_pic_nums_idc {
+                    0 => {
+                        let diff = m.value as i32 + 1;
+                        pic_num_pred = (pic_num_pred - diff).rem_euclid(max_frame_num as i32);
+                        if let Some(pos) = short_terms
+                            .iter()
+                            .position(|f| (f.frame_num as i32) == pic_num_pred)
+                        {
+                            let frame = short_terms.remove(pos);
+                            short_terms.insert(ref_idx.min(short_terms.len()), frame);
+                            ref_idx += 1;
+                        }
+                    }
+                    1 => {
+                        let diff = m.value as i32 + 1;
+                        pic_num_pred = (pic_num_pred + diff).rem_euclid(max_frame_num as i32);
+                        if let Some(pos) = short_terms
+                            .iter()
+                            .position(|f| (f.frame_num as i32) == pic_num_pred)
+                        {
+                            let frame = short_terms.remove(pos);
+                            short_terms.insert(ref_idx.min(short_terms.len()), frame);
+                            ref_idx += 1;
+                        }
+                    }
+                    _ => break,
+                }
+            }
+        }
 
         for (i, slot) in list.iter_mut().enumerate() {
             if let Some(f) = short_terms.get(i) {

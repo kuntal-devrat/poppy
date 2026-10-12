@@ -67,10 +67,10 @@ fn codec_to_c_int(c: CodecId) -> c_int {
     }
 }
 
-/// Returns the semver version string of Poppy ("0.5.0").
+/// Returns the semver version string of Poppy ("0.5.5").
 #[unsafe(no_mangle)]
 pub extern "C" fn poppy_version() -> *const c_char {
-    static VERSION: &[u8] = b"0.5.0\0";
+    static VERSION: &[u8] = b"0.5.5\0";
     VERSION.as_ptr() as *const c_char
 }
 

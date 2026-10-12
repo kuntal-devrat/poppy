@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.5.5] - 2026-10-12
+
+### Fixed
+- **Pixel-Perfect H.264 & HEVC Continuous POC MSB Tracking**: Implemented full `PicOrderCntMsb` state machine per ITU-T H.264 §8.2.1.1 / §8.2.1.3 and ITU-T H.265 §8.3.1. Eliminates `pic_order_cnt_lsb` rollover corruptions where wrapped frames were bumped out of order and inverted reference lists caused macroblock tearing.
+- **H.264 Weighted Prediction (`pred_weight_table`) Support**: Added complete prediction weight table parsing in `poppy-h264` and passed luma/chroma weights, denoms, and offsets into `VASliceParameterBufferH264` to eliminate brightness/color flashing during video cross-fades and transitions.
+- **Reference Picture List Modification (RPLR)**: Implemented H.264 §8.2.4.3 list modification in DPB `fill_ref_pic_list0` and `fill_ref_pic_list1` to properly support reordered motion prediction on retimed/slow-motion effects.
+
+### Added
+- **Monotonic Presentation Regression Test**: Added `test_hw_decode_verify_monotonic_pts` in `crates/poppy-hw` asserting strict monotonic timestamp order across multi-B-frame sequences.
+
+---
+
 ## [0.5.0] - 2026-10-11
 
 ### Added

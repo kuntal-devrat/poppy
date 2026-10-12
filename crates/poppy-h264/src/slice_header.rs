@@ -34,6 +34,53 @@ impl SliceType {
     }
 }
 
+/// Modification command for reference picture lists (ITU-T H.264 §7.3.3.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RefPicListModification {
+    pub modification_of_pic_nums_idc: u32,
+    pub value: u32,
+}
+
+/// Prediction weight table for weighted prediction (ITU-T H.264 §7.3.3.2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PredWeightTable {
+    pub luma_log2_weight_denom: u8,
+    pub chroma_log2_weight_denom: u8,
+    pub luma_weight_l0_flag: u8,
+    pub luma_weight_l0: [i16; 32],
+    pub luma_offset_l0: [i16; 32],
+    pub chroma_weight_l0_flag: u8,
+    pub chroma_weight_l0: [[i16; 2]; 32],
+    pub chroma_offset_l0: [[i16; 2]; 32],
+    pub luma_weight_l1_flag: u8,
+    pub luma_weight_l1: [i16; 32],
+    pub luma_offset_l1: [i16; 32],
+    pub chroma_weight_l1_flag: u8,
+    pub chroma_weight_l1: [[i16; 2]; 32],
+    pub chroma_offset_l1: [[i16; 2]; 32],
+}
+
+impl Default for PredWeightTable {
+    fn default() -> Self {
+        Self {
+            luma_log2_weight_denom: 0,
+            chroma_log2_weight_denom: 0,
+            luma_weight_l0_flag: 0,
+            luma_weight_l0: [1; 32],
+            luma_offset_l0: [0; 32],
+            chroma_weight_l0_flag: 0,
+            chroma_weight_l0: [[1, 1]; 32],
+            chroma_offset_l0: [[0, 0]; 32],
+            luma_weight_l1_flag: 0,
+            luma_weight_l1: [1; 32],
+            luma_offset_l1: [0; 32],
+            chroma_weight_l1_flag: 0,
+            chroma_weight_l1: [[1, 1]; 32],
+            chroma_offset_l1: [[0, 0]; 32],
+        }
+    }
+}
+
 /// A parsed slice header.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SliceHeader {
@@ -54,6 +101,9 @@ pub struct SliceHeader {
     pub direct_spatial_mv_pred_flag: bool,
     pub num_ref_idx_l0_active_minus1: u32,
     pub num_ref_idx_l1_active_minus1: u32,
+    pub ref_pic_list_modification_l0: Vec<RefPicListModification>,
+    pub ref_pic_list_modification_l1: Vec<RefPicListModification>,
+    pub pred_weight_table: Option<PredWeightTable>,
     pub cabac_init_idc: u32,
     pub slice_qp_delta: i32,
 
@@ -143,6 +193,7 @@ impl SliceHeader {
         }
 
         // ref_pic_list_modification()
+        let mut ref_pic_list_modification_l0 = Vec::new();
         if slice_type != SliceType::I && slice_type != SliceType::Si {
             let ref_pic_list_modification_flag_l0 = r.read_bit()?;
             if ref_pic_list_modification_flag_l0 {
@@ -151,10 +202,15 @@ impl SliceHeader {
                     if mod_idc == 3 {
                         break;
                     }
-                    let _abs_diff_pic_num_minus1 = r.read_ue()?;
+                    let val = r.read_ue()?;
+                    ref_pic_list_modification_l0.push(RefPicListModification {
+                        modification_of_pic_nums_idc: mod_idc,
+                        value: val,
+                    });
                 }
             }
         }
+        let mut ref_pic_list_modification_l1 = Vec::new();
         if slice_type == SliceType::B {
             let ref_pic_list_modification_flag_l1 = r.read_bit()?;
             if ref_pic_list_modification_flag_l1 {
@@ -163,53 +219,82 @@ impl SliceHeader {
                     if mod_idc == 3 {
                         break;
                     }
-                    let _abs_diff_pic_num_minus1 = r.read_ue()?;
+                    let val = r.read_ue()?;
+                    ref_pic_list_modification_l1.push(RefPicListModification {
+                        modification_of_pic_nums_idc: mod_idc,
+                        value: val,
+                    });
                 }
             }
         }
 
         // pred_weight_table()
+        let mut pred_weight_table = None;
         if (pps.weighted_pred_flag && (slice_type == SliceType::P || slice_type == SliceType::Sp))
             || (pps.weighted_bipred_idc == 1 && slice_type == SliceType::B)
         {
-            let _luma_log2_weight_denom = r.read_ue()?;
+            let mut pwt = PredWeightTable::default();
+            let luma_denom = r.read_ue()? as u8;
+            pwt.luma_log2_weight_denom = luma_denom;
+            let default_luma_weight = 1i16 << luma_denom.min(14);
+            pwt.luma_weight_l0.fill(default_luma_weight);
+            pwt.luma_weight_l1.fill(default_luma_weight);
+
             if sps.chroma_format_idc != 0 {
-                let _chroma_log2_weight_denom = r.read_ue()?;
+                let chroma_denom = r.read_ue()? as u8;
+                pwt.chroma_log2_weight_denom = chroma_denom;
+                let default_chroma_weight = 1i16 << chroma_denom.min(14);
+                pwt.chroma_weight_l0
+                    .fill([default_chroma_weight, default_chroma_weight]);
+                pwt.chroma_weight_l1
+                    .fill([default_chroma_weight, default_chroma_weight]);
             }
-            for _ in 0..=num_ref_idx_l0_active_minus1 {
+
+            let num_l0 = (num_ref_idx_l0_active_minus1 as usize).min(31);
+            for i in 0..=num_l0 {
                 let luma_weight_flag = r.read_bit()?;
                 if luma_weight_flag {
-                    let _weight = r.read_se()?;
-                    let _offset = r.read_se()?;
+                    pwt.luma_weight_l0_flag = 1;
+                    pwt.luma_weight_l0[i] = r.read_se()? as i16;
+                    pwt.luma_offset_l0[i] = r.read_se()? as i16;
                 }
                 if sps.chroma_format_idc != 0 {
                     let chroma_weight_flag = r.read_bit()?;
                     if chroma_weight_flag {
-                        let _w0 = r.read_se()?;
-                        let _o0 = r.read_se()?;
-                        let _w1 = r.read_se()?;
-                        let _o1 = r.read_se()?;
+                        pwt.chroma_weight_l0_flag = 1;
+                        let w0 = r.read_se()? as i16;
+                        let o0 = r.read_se()? as i16;
+                        let w1 = r.read_se()? as i16;
+                        let o1 = r.read_se()? as i16;
+                        pwt.chroma_weight_l0[i] = [w0, w1];
+                        pwt.chroma_offset_l0[i] = [o0, o1];
                     }
                 }
             }
             if slice_type == SliceType::B {
-                for _ in 0..=num_ref_idx_l1_active_minus1 {
+                let num_l1 = (num_ref_idx_l1_active_minus1 as usize).min(31);
+                for i in 0..=num_l1 {
                     let luma_weight_flag = r.read_bit()?;
                     if luma_weight_flag {
-                        let _weight = r.read_se()?;
-                        let _offset = r.read_se()?;
+                        pwt.luma_weight_l1_flag = 1;
+                        pwt.luma_weight_l1[i] = r.read_se()? as i16;
+                        pwt.luma_offset_l1[i] = r.read_se()? as i16;
                     }
                     if sps.chroma_format_idc != 0 {
                         let chroma_weight_flag = r.read_bit()?;
                         if chroma_weight_flag {
-                            let _w0 = r.read_se()?;
-                            let _o0 = r.read_se()?;
-                            let _w1 = r.read_se()?;
-                            let _o1 = r.read_se()?;
+                            pwt.chroma_weight_l1_flag = 1;
+                            let w0 = r.read_se()? as i16;
+                            let o0 = r.read_se()? as i16;
+                            let w1 = r.read_se()? as i16;
+                            let o1 = r.read_se()? as i16;
+                            pwt.chroma_weight_l1[i] = [w0, w1];
+                            pwt.chroma_offset_l1[i] = [o0, o1];
                         }
                     }
                 }
             }
+            pred_weight_table = Some(pwt);
         }
 
         // dec_ref_pic_marking() (ITU-T H.264 §7.3.3: only present when nal_ref_idc != 0)
@@ -287,6 +372,9 @@ impl SliceHeader {
             direct_spatial_mv_pred_flag,
             num_ref_idx_l0_active_minus1,
             num_ref_idx_l1_active_minus1,
+            ref_pic_list_modification_l0,
+            ref_pic_list_modification_l1,
+            pred_weight_table,
             cabac_init_idc,
             slice_qp_delta,
             disable_deblocking_filter_idc,

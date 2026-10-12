@@ -30,6 +30,8 @@ pub struct VaapiHevcDecoder {
     output_queue: VecDeque<DecodedFrame>,
     cur_surface_idx: usize,
     is_10bit: bool,
+    prev_poc_msb: i32,
+    prev_poc_lsb: i32,
 }
 
 impl VaapiHevcDecoder {
@@ -48,6 +50,8 @@ impl VaapiHevcDecoder {
             output_queue: VecDeque::new(),
             cur_surface_idx: 0,
             is_10bit,
+            prev_poc_msb: 0,
+            prev_poc_lsb: 0,
         })
     }
 
@@ -217,6 +221,8 @@ impl HwDecoder for VaapiHevcDecoder {
 
             // Clear DPB on IDR
             if first_nut.is_idr() {
+                self.prev_poc_msb = 0;
+                self.prev_poc_lsb = 0;
                 let released = self.dpb.clear_on_idr();
                 for rf in released {
                     let w = sps.cropped_width();
@@ -291,7 +297,28 @@ impl HwDecoder for VaapiHevcDecoder {
                 .unwrap_or(pool.surfaces[self.cur_surface_idx]);
             self.cur_surface_idx = (self.cur_surface_idx + 1) % pool.surfaces.len();
 
-            let cur_poc = first_slice.slice_pic_order_cnt_lsb as i32;
+            let max_poc_lsb = 1i32 << (sps.log2_max_pic_order_cnt_lsb_minus4 + 4);
+            let poc_lsb = first_slice.slice_pic_order_cnt_lsb as i32;
+            let (poc_msb, cur_poc) = if first_nut.is_idr() {
+                self.prev_poc_msb = 0;
+                self.prev_poc_lsb = 0;
+                (0, 0)
+            } else {
+                let msb = if (poc_lsb < self.prev_poc_lsb)
+                    && (self.prev_poc_lsb - poc_lsb >= max_poc_lsb / 2)
+                {
+                    self.prev_poc_msb + max_poc_lsb
+                } else if (poc_lsb > self.prev_poc_lsb)
+                    && (poc_lsb - self.prev_poc_lsb > max_poc_lsb / 2)
+                {
+                    self.prev_poc_msb - max_poc_lsb
+                } else {
+                    self.prev_poc_msb
+                };
+                (msb, msb + poc_lsb)
+            };
+            self.prev_poc_msb = poc_msb;
+            self.prev_poc_lsb = poc_lsb;
 
             // Build VAPictureParameterBufferHEVC
             let mut pic_param: VAPictureParameterBufferHEVC = unsafe { std::mem::zeroed() };

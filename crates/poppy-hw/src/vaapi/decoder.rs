@@ -25,6 +25,10 @@ pub struct VaapiH264Decoder {
     active_pps_id: Option<u32>,
     output_queue: VecDeque<DecodedFrame>,
     cur_surface_idx: usize,
+    prev_poc_msb: i32,
+    prev_poc_lsb: i32,
+    prev_frame_num: u32,
+    prev_frame_num_offset: i32,
 }
 
 impl VaapiH264Decoder {
@@ -41,6 +45,10 @@ impl VaapiH264Decoder {
             active_pps_id: None,
             output_queue: VecDeque::new(),
             cur_surface_idx: 0,
+            prev_poc_msb: 0,
+            prev_poc_lsb: 0,
+            prev_frame_num: 0,
+            prev_frame_num_offset: 0,
         })
     }
 
@@ -291,8 +299,58 @@ impl HwDecoder for VaapiH264Decoder {
 
             let (_first_nal, first_header, first_slice) = &slices[0];
             let cur_poc = match sps.pic_order_cnt_type {
-                0 => first_slice.pic_order_cnt_lsb.unwrap_or(0) as i32,
-                2 => (first_slice.frame_num as i32) * 2,
+                0 => {
+                    let max_poc_lsb = 1i32 << (sps.log2_max_pic_order_cnt_lsb_minus4 + 4);
+                    let poc_lsb = first_slice.pic_order_cnt_lsb.unwrap_or(0) as i32;
+                    let (poc_msb, poc) = if first_header.unit_type.is_idr() {
+                        self.prev_poc_msb = 0;
+                        self.prev_poc_lsb = 0;
+                        (0, 0)
+                    } else {
+                        let msb = if (poc_lsb < self.prev_poc_lsb)
+                            && (self.prev_poc_lsb - poc_lsb >= max_poc_lsb / 2)
+                        {
+                            self.prev_poc_msb + max_poc_lsb
+                        } else if (poc_lsb > self.prev_poc_lsb)
+                            && (poc_lsb - self.prev_poc_lsb > max_poc_lsb / 2)
+                        {
+                            self.prev_poc_msb - max_poc_lsb
+                        } else {
+                            self.prev_poc_msb
+                        };
+                        (msb, msb + poc_lsb)
+                    };
+                    if first_header.nal_ref_idc != 0 {
+                        self.prev_poc_msb = poc_msb;
+                        self.prev_poc_lsb = poc_lsb;
+                    }
+                    poc
+                }
+                2 => {
+                    let max_frame_num = 1i32 << (sps.log2_max_frame_num_minus4 + 4);
+                    let frame_num = first_slice.frame_num as i32;
+                    if first_header.unit_type.is_idr() {
+                        self.prev_frame_num = 0;
+                        self.prev_frame_num_offset = 0;
+                        0
+                    } else {
+                        let frame_num_offset = if frame_num < self.prev_frame_num as i32 {
+                            self.prev_frame_num_offset + max_frame_num
+                        } else {
+                            self.prev_frame_num_offset
+                        };
+                        let poc = if first_header.nal_ref_idc == 0 {
+                            2 * (frame_num_offset + frame_num) - 1
+                        } else {
+                            2 * (frame_num_offset + frame_num)
+                        };
+                        if first_header.nal_ref_idc != 0 {
+                            self.prev_frame_num = first_slice.frame_num;
+                            self.prev_frame_num_offset = frame_num_offset;
+                        }
+                        poc
+                    }
+                }
                 _ => first_slice
                     .pic_order_cnt_lsb
                     .unwrap_or(first_slice.frame_num * 2) as i32,
@@ -300,6 +358,10 @@ impl HwDecoder for VaapiH264Decoder {
 
             // Clear DPB on IDR
             if first_header.unit_type.is_idr() {
+                self.prev_poc_msb = 0;
+                self.prev_poc_lsb = 0;
+                self.prev_frame_num = 0;
+                self.prev_frame_num_offset = 0;
                 let released = self.dpb.clear_on_idr();
                 for rf in released {
                     let dmabuf = pool.export_dmabuf_descriptor(rf.surface_id).ok();
@@ -357,12 +419,18 @@ impl HwDecoder for VaapiH264Decoder {
             } else {
                 0
             };
+            let (top_poc, bottom_poc) = if !first_slice.field_pic_flag {
+                let delta = first_slice.delta_pic_order_cnt_bottom.unwrap_or(0);
+                (cur_poc, cur_poc + delta)
+            } else {
+                (cur_poc, cur_poc)
+            };
             pic_param.curr_pic = VAPictureH264 {
                 picture_id: target_surface,
                 frame_idx: first_slice.frame_num,
                 flags: pic_flags,
-                top_field_order_cnt: cur_poc,
-                bottom_field_order_cnt: cur_poc,
+                top_field_order_cnt: top_poc,
+                bottom_field_order_cnt: bottom_poc,
                 va_reserved: [0; 4],
             };
 
@@ -500,11 +568,40 @@ impl HwDecoder for VaapiH264Decoder {
                         slice_beta_offset_div2: slice.slice_beta_offset_div2 as i8,
                         ..Default::default()
                     };
-                    self.dpb
-                        .fill_ref_pic_list0(cur_poc, &mut slice_param.ref_pic_list0);
+
+                    if let Some(ref pwt) = slice.pred_weight_table {
+                        slice_param.luma_log2_weight_denom = pwt.luma_log2_weight_denom;
+                        slice_param.chroma_log2_weight_denom = pwt.chroma_log2_weight_denom;
+                        slice_param.luma_weight_l0_flag = pwt.luma_weight_l0_flag;
+                        slice_param.luma_weight_l0 = pwt.luma_weight_l0;
+                        slice_param.luma_offset_l0 = pwt.luma_offset_l0;
+                        slice_param.chroma_weight_l0_flag = pwt.chroma_weight_l0_flag;
+                        slice_param.chroma_weight_l0 = pwt.chroma_weight_l0;
+                        slice_param.chroma_offset_l0 = pwt.chroma_offset_l0;
+                        slice_param.luma_weight_l1_flag = pwt.luma_weight_l1_flag;
+                        slice_param.luma_weight_l1 = pwt.luma_weight_l1;
+                        slice_param.luma_offset_l1 = pwt.luma_offset_l1;
+                        slice_param.chroma_weight_l1_flag = pwt.chroma_weight_l1_flag;
+                        slice_param.chroma_weight_l1 = pwt.chroma_weight_l1;
+                        slice_param.chroma_offset_l1 = pwt.chroma_offset_l1;
+                    }
+
+                    let max_frame_num = 1u32 << (sps.log2_max_frame_num_minus4 + 4);
+                    self.dpb.fill_ref_pic_list0(
+                        cur_poc,
+                        slice.frame_num,
+                        max_frame_num,
+                        &slice.ref_pic_list_modification_l0,
+                        &mut slice_param.ref_pic_list0,
+                    );
                     if slice.slice_type == poppy_h264::SliceType::B {
-                        self.dpb
-                            .fill_ref_pic_list1(cur_poc, &mut slice_param.ref_pic_list1);
+                        self.dpb.fill_ref_pic_list1(
+                            cur_poc,
+                            slice.frame_num,
+                            max_frame_num,
+                            &slice.ref_pic_list_modification_l1,
+                            &mut slice_param.ref_pic_list1,
+                        );
                     }
 
                     let mut buf_slice_param = 0;
