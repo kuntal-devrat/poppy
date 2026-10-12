@@ -345,12 +345,21 @@ impl MediaStream {
                 if let Ok(mut dec) =
                     poppy_hw::videotoolbox::VideoToolboxDecoder::new(stream_info.codec)
                 {
+                    let mut init_ok = false;
                     if let poppy_core::codec::CodecConfig::H264(avcc) = &stream_info.config {
-                        let _ = dec.set_extradata(&avcc.raw);
+                        if dec.set_extradata(&avcc.raw).is_ok() {
+                            init_ok = true;
+                        }
                     } else if let poppy_core::codec::CodecConfig::Hevc(hvcc) = &stream_info.config {
-                        let _ = dec.set_extradata(&hvcc.raw);
+                        if dec.set_extradata(&hvcc.raw).is_ok() {
+                            init_ok = true;
+                        }
                     }
-                    Some(Box::new(dec) as Box<dyn HwDecoder>)
+                    if init_ok {
+                        Some(Box::new(dec) as Box<dyn HwDecoder>)
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }

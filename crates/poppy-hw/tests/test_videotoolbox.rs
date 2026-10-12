@@ -92,6 +92,7 @@ fn test_videotoolbox_decode_multislice_and_cvpixelbuffer_export() {
 
     // Ingest parameter sets
     if let poppy_core::codec::CodecConfig::H264(ref avcc) = video_config {
+        let _ = decoder.set_extradata(&avcc.raw);
         for sps in &avcc.sps_list {
             let mut data = vec![0, 0, 0, 1];
             data.extend_from_slice(sps);

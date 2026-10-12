@@ -240,12 +240,7 @@ impl VideoToolboxDecoder {
             self.callback_refcon = ptr::null_mut();
         }
 
-        // Build destination pixel buffer attributes dictionary:
-        //   kCVPixelBufferPixelFormatTypeKey -> NV12 or P010
-        //   kCVPixelBufferIOSurfacePropertiesKey -> {} (enables IOSurface-backed buffers)
-        let dest_attrs = unsafe { self.create_dest_image_buffer_attrs() };
-
-        // Set up async output callback
+        // Set up output callback
         let queue = Arc::clone(&self.output_queue);
         let queue_raw = Arc::into_raw(queue) as *mut c_void;
         self.callback_refcon = queue_raw;
@@ -260,17 +255,11 @@ impl VideoToolboxDecoder {
                 ptr::null(), // kCFAllocatorDefault
                 self.format_desc,
                 ptr::null(), // videoDecoderSpecification
-                dest_attrs as CFDictionaryRef,
+                ptr::null(), // destinationImageBufferAttributes (default)
                 &callback_record as *const _ as *const _,
                 &mut session,
             )
         };
-
-        if !dest_attrs.is_null() {
-            unsafe {
-                (self.funcs.cf_release)(dest_attrs as CFTypeRef);
-            }
-        }
 
         if status != NO_ERR || session.is_null() {
             if !self.callback_refcon.is_null() {
@@ -288,61 +277,21 @@ impl VideoToolboxDecoder {
         Ok(())
     }
 
-    unsafe fn create_dest_image_buffer_attrs(&self) -> CFMutableDictionaryRef {
-        let dict = unsafe {
-            (self.funcs.cf_dictionary_create_mutable)(ptr::null(), 2, ptr::null(), ptr::null())
-        };
-        if dict.is_null() {
-            return ptr::null_mut();
-        }
-
-        // Set pixel format
-        let pf = if self.is_10bit {
-            K_CV_PIXEL_FORMAT_TYPE_420_YP_CB_CR10_BI_PLANAR_VIDEO_RANGE
-        } else {
-            K_CV_PIXEL_FORMAT_TYPE_420_YP_CB_CR8_BI_PLANAR_VIDEO_RANGE
-        };
-        let pf_i32 = pf as i32;
-        let pf_num = unsafe {
-            (self.funcs.cf_number_create)(
-                ptr::null(),
-                K_CF_NUMBER_SI_NT32_TYPE,
-                &pf_i32 as *const i32 as *const c_void,
-            )
-        };
-        if !pf_num.is_null() {
-            // Key: kCVPixelBufferPixelFormatTypeKey (we use the known string constant address)
-            // Since we can't easily get the address of external CF string constants via dlsym
-            // on the mutable-dictionary side, we set the pixel format directly.
-            // VideoToolbox will negotiate the best format if we just pass the attributes.
-            unsafe {
-                (self.funcs.cf_release)(pf_num as CFTypeRef);
-            }
-        }
-
-        // IOSurface properties (empty dict enables IOSurface-backed CVPixelBuffers)
-        let io_surface_props = unsafe {
-            (self.funcs.cf_dictionary_create_mutable)(ptr::null(), 0, ptr::null(), ptr::null())
-        };
-        if !io_surface_props.is_null() {
-            unsafe {
-                (self.funcs.cf_release)(io_surface_props as CFTypeRef);
-            }
-        }
-
-        dict
-    }
-
-    /// Submit a compressed AVCC/HVCC length-prefixed packet to the decoder.
+    /// Submit a compressed packet (Annex-B or AVCC/HVCC length-prefixed) to the decoder.
     fn decode_packet(&mut self, packet: &Packet) -> Result<(), HwError> {
-        if self.session.is_null() {
-            return Err(HwError::DecodeError(
-                "VTDecompressionSession not initialized; call set_extradata first".into(),
-            ));
-        }
-
         let data = &packet.data;
         if data.is_empty() {
+            return Ok(());
+        }
+
+        if self.session.is_null() {
+            // Parameter set or pre-init packet submitted before session exists; return Ok safely.
+            return Ok(());
+        }
+
+        // Ensure bitstream is formatted with 4-byte length prefixes required by VideoToolbox.
+        let nal_data = to_length_prefixed(data);
+        if nal_data.is_empty() {
             return Ok(());
         }
 
@@ -351,12 +300,12 @@ impl VideoToolboxDecoder {
         let status = unsafe {
             (self.funcs.cm_block_buffer_create_with_memory_block)(
                 ptr::null(), // kCFAllocatorDefault
-                data.as_ptr() as *const c_void,
-                data.len(),
-                ptr::null(), // kCFAllocatorNull (we manage the memory)
+                nal_data.as_ptr() as *const c_void,
+                nal_data.len(),
+                ptr::null(), // kCFAllocatorNull (we manage the memory during sync decode)
                 ptr::null(), // customBlockSource
                 0,           // offsetToData
-                data.len(),
+                nal_data.len(),
                 0, // flags
                 &mut block_buffer,
             )
@@ -369,7 +318,7 @@ impl VideoToolboxDecoder {
         }
 
         // Create CMSampleBuffer
-        let sample_size = data.len();
+        let sample_size = nal_data.len();
         let pts_time = if let Some(pts) = packet.pts {
             CMTime::make(pts, 90_000) // Default to 90kHz timebase
         } else {
@@ -410,7 +359,7 @@ impl VideoToolboxDecoder {
             )));
         }
 
-        // Decode the frame asynchronously
+        // Decode the frame synchronously
         let mut info_flags: u32 = 0;
 
         // Pass PTS as source_frame_ref_con so the callback can associate it
@@ -419,8 +368,7 @@ impl VideoToolboxDecoder {
             (self.funcs.vt_decompression_session_decode_frame)(
                 self.session,
                 sample_buffer,
-                K_VT_DECODE_FRAME_ENABLE_ASYNCHRONOUS_DECOMPRESSION
-                    | K_VT_DECODE_FRAME_1X_REAL_TIME_PLAYBACK,
+                0, // Synchronous decode guarantees nal_data lifetime safety and immediate frame delivery
                 pts_val as *mut c_void,
                 &mut info_flags,
             )
@@ -639,4 +587,51 @@ unsafe fn read_pixel_buffer_data(
     }
 
     Some(data)
+}
+
+/// Convert Annex-B byte-stream NAL units into AVCC/HVCC 4-byte big-endian length-prefixed NALs.
+/// If the data is already length-prefixed, it is returned unmodified.
+fn to_length_prefixed(data: &[u8]) -> Vec<u8> {
+    if data.len() < 4 || (!data.starts_with(&[0, 0, 1]) && !data.starts_with(&[0, 0, 0, 1])) {
+        return data.to_vec();
+    }
+
+    let mut out = Vec::with_capacity(data.len() + 16);
+    let mut i = 0;
+    while i < data.len() {
+        // Find start code
+        let start = if i + 3 <= data.len() && data[i..i + 3] == [0, 0, 1] {
+            i + 3
+        } else if i + 4 <= data.len() && data[i..i + 4] == [0, 0, 0, 1] {
+            i + 4
+        } else {
+            i += 1;
+            continue;
+        };
+
+        // Find end of this NAL unit (next start code or end of slice)
+        let mut end = data.len();
+        let mut j = start;
+        while j + 3 <= data.len() {
+            if data[j..j + 3] == [0, 0, 1] {
+                if j > start && data[j - 1] == 0 {
+                    end = j - 1;
+                } else {
+                    end = j;
+                }
+                break;
+            }
+            j += 1;
+        }
+
+        if end > start {
+            let nal = &data[start..end];
+            let len = nal.len() as u32;
+            out.extend_from_slice(&len.to_be_bytes());
+            out.extend_from_slice(nal);
+        }
+        i = end;
+    }
+
+    if out.is_empty() { data.to_vec() } else { out }
 }
