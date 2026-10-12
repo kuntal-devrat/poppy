@@ -7,8 +7,8 @@ pub mod openh264;
 
 pub use openh264::OpenH264Decoder;
 
-use poppy_core::CodecId;
 use crate::{HwDecoder, HwError};
+use poppy_core::CodecId;
 
 /// Instantiates an available software decoder for the requested codec.
 ///

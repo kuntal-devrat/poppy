@@ -150,7 +150,7 @@ impl D3D12VideoDevice {
         let mut device: *mut c_void = ptr::null_mut();
         let hr = unsafe {
             (funcs.d3d12_create_device)(
-                ptr::null_mut(),       // pAdapter = nullptr (default)
+                ptr::null_mut(), // pAdapter = nullptr (default)
                 D3D_FEATURE_LEVEL_11_0,
                 &IID_ID3D12DEVICE,
                 &mut device,

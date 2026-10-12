@@ -92,7 +92,9 @@ impl TryFrom<&DmaBufDescriptor> for DmaBufImage {
 
     fn try_from(desc: &DmaBufDescriptor) -> Result<Self, Self::Error> {
         if desc.fd < 0 {
-            return Err(RenderError::ImportFailed("Invalid DMA-BUF fd in descriptor".into()));
+            return Err(RenderError::ImportFailed(
+                "Invalid DMA-BUF fd in descriptor".into(),
+            ));
         }
         #[cfg(unix)]
         let owned_fd = {

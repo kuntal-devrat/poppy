@@ -160,15 +160,13 @@ impl MpegTsDemuxer {
                         if let Some(parsed_pmt_pid) = parse_pat(payload, pusi) {
                             pmt_pid = Some(parsed_pmt_pid);
                         }
-                    } else if let Some(target_pmt_pid) = pmt_pid {
+                    } else if pmt_pid == Some(pid) {
                         // PMT (Program Map Table)
-                        if pid == target_pmt_pid {
-                            if let Some(streams) = parse_pmt(payload, pusi) {
-                                for es in streams {
-                                    self.es_map.insert(es.pid, es);
-                                }
-                                break;
+                        if let Some(streams) = parse_pmt(payload, pusi) {
+                            for es in streams {
+                                self.es_map.insert(es.pid, es);
                             }
+                            break;
                         }
                     }
                 }
@@ -323,29 +321,28 @@ impl MpegTsDemuxer {
                     payload_offset = 5 + aflen;
                 }
 
-                if pusi && payload_offset + 9 <= 188 {
-                    if let Some(es) = self.es_map.get(&pid) {
-                        let payload = &pkt[payload_offset..];
-                        if payload.starts_with(&[0x00, 0x00, 0x01]) {
-                            let pts = parse_pes_pts(&payload[3..]);
-                            if let Some(pts_val) = pts {
-                                // Check if this PES starts with an IDR/keyframe NAL
-                                let mut is_key = is_random_access;
-                                if !is_key && payload.len() > 14 {
-                                    if es.codec_id == CodecId::H264 {
-                                        is_key = has_h264_idr(&payload[9..]);
-                                    } else if es.codec_id == CodecId::Hevc {
-                                        is_key = has_hevc_idr(&payload[9..]);
-                                    }
+                if pusi && payload_offset + 9 <= 188 && self.es_map.contains_key(&pid) {
+                    let es = &self.es_map[&pid];
+                    let payload = &pkt[payload_offset..];
+                    if payload.starts_with(&[0x00, 0x00, 0x01]) {
+                        let pts = parse_pes_pts(&payload[3..]);
+                        if let Some(pts_val) = pts {
+                            // Check if this PES starts with an IDR/keyframe NAL
+                            let mut is_key = is_random_access;
+                            if !is_key && payload.len() > 14 {
+                                if es.codec_id == CodecId::H264 {
+                                    is_key = has_h264_idr(&payload[9..]);
+                                } else if es.codec_id == CodecId::Hevc {
+                                    is_key = has_hevc_idr(&payload[9..]);
                                 }
+                            }
 
-                                if is_key {
-                                    self.keyframe_index.push(KeyframeIndexEntry {
-                                        packet_offset: pos,
-                                        pts: pts_val,
-                                        stream_index: es.stream_index,
-                                    });
-                                }
+                            if is_key {
+                                self.keyframe_index.push(KeyframeIndexEntry {
+                                    packet_offset: pos,
+                                    pts: pts_val,
+                                    stream_index: es.stream_index,
+                                });
                             }
                         }
                     }
@@ -401,9 +398,8 @@ impl MpegTsDemuxer {
 
             let mut payload_buf = [0u8; 188];
             let payload_len = 188 - payload_offset;
-            payload_buf[..payload_len].copy_from_slice(
-                &self.data[pos + prefix + payload_offset..pos + prefix + 188],
-            );
+            payload_buf[..payload_len]
+                .copy_from_slice(&self.data[pos + prefix + payload_offset..pos + prefix + 188]);
             let payload_data = &payload_buf[..payload_len];
 
             if pusi {
@@ -434,17 +430,26 @@ impl MpegTsDemuxer {
                     let pts_dts_flags = (flags >> 6) & 0x03;
 
                     let offset = 9;
-                    if pts_dts_flags == 0b10 && header_data_len >= 5 && offset + 5 <= payload_data.len() {
+                    if pts_dts_flags == 0b10
+                        && header_data_len >= 5
+                        && offset + 5 <= payload_data.len()
+                    {
                         reassembler.pts = parse_33bit_timestamp(&payload_data[offset..offset + 5]);
                         reassembler.dts = reassembler.pts;
-                    } else if pts_dts_flags == 0b11 && header_data_len >= 10 && offset + 10 <= payload_data.len() {
+                    } else if pts_dts_flags == 0b11
+                        && header_data_len >= 10
+                        && offset + 10 <= payload_data.len()
+                    {
                         reassembler.pts = parse_33bit_timestamp(&payload_data[offset..offset + 5]);
-                        reassembler.dts = parse_33bit_timestamp(&payload_data[offset + 5..offset + 10]);
+                        reassembler.dts =
+                            parse_33bit_timestamp(&payload_data[offset + 5..offset + 10]);
                     }
 
                     let pes_payload_start = 9 + header_data_len;
                     if pes_payload_start <= payload_data.len() {
-                        reassembler.buffer.extend_from_slice(&payload_data[pes_payload_start..]);
+                        reassembler
+                            .buffer
+                            .extend_from_slice(&payload_data[pes_payload_start..]);
                     }
                 } else {
                     reassembler.buffer.extend_from_slice(payload_data);
@@ -464,11 +469,13 @@ impl MpegTsDemuxer {
                 reassembler.buffer.extend_from_slice(payload_data);
 
                 // Check if bounded PES packet is now complete
-                if let Some(expected) = reassembler.expected_len {
-                    if reassembler.buffer.len() >= expected {
-                        if let Some(finished) = self.finalize_pes_packet(pid) {
-                            return Ok(Some(finished));
-                        }
+                if reassembler
+                    .expected_len
+                    .is_some_and(|expected| reassembler.buffer.len() >= expected)
+                {
+                    let finished = self.finalize_pes_packet(pid);
+                    if let Some(finished) = finished {
+                        return Ok(Some(finished));
                     }
                 }
             }
@@ -541,8 +548,7 @@ impl Demuxer for MpegTsDemuxer {
         let target_entry = self
             .keyframe_index
             .iter()
-            .filter(|k| k.stream_index == stream_index && k.pts <= timestamp)
-            .last()
+            .rfind(|k| k.stream_index == stream_index && k.pts <= timestamp)
             .or_else(|| {
                 // If seeking before first keyframe, seek to earliest keyframe
                 self.keyframe_index.first()
@@ -737,11 +743,8 @@ fn parse_33bit_timestamp(bytes: &[u8]) -> Option<i64> {
     let b3 = bytes[3] as i64;
     let b4 = bytes[4] as i64;
 
-    let pts = ((b0 & 0x0E) << 29)
-        | (b1 << 22)
-        | ((b2 & 0xFE) << 14)
-        | (b3 << 7)
-        | ((b4 & 0xFE) >> 1);
+    let pts =
+        ((b0 & 0x0E) << 29) | (b1 << 22) | ((b2 & 0xFE) << 14) | (b3 << 7) | ((b4 & 0xFE) >> 1);
 
     Some(pts)
 }

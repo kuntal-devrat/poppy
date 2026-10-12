@@ -239,7 +239,8 @@ fn test_c_abi_concurrent_access() {
     }
 
     for h in handles {
-        h.join().expect("Thread panicked during concurrent FFI access");
+        h.join()
+            .expect("Thread panicked during concurrent FFI access");
     }
 
     unsafe {
@@ -304,17 +305,14 @@ fn test_c_abi_audio_pipeline_on_real_media() {
                 assert!(pts_sec >= 0.0);
 
                 let mut pcm_buf = vec![0.0f32; sample_count];
-                let copy_res = poppy_audio_frame_get_samples(
-                    audio_frame,
-                    pcm_buf.as_mut_ptr(),
-                    pcm_buf.len(),
-                );
+                let copy_res =
+                    poppy_audio_frame_get_samples(audio_frame, pcm_buf.as_mut_ptr(), pcm_buf.len());
                 assert_eq!(copy_res, POPPY_OK);
 
                 // Samples must be within normalized [-1.0, 1.0] range
                 for &sample in &pcm_buf {
                     assert!(
-                        sample >= -1.5 && sample <= 1.5,
+                        (-1.5..=1.5).contains(&sample),
                         "Sample out of range: {sample}"
                     );
                 }
@@ -386,5 +384,3 @@ fn test_c_abi_header_parity() {
         );
     }
 }
-
-

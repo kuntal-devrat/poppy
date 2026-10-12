@@ -1001,12 +1001,10 @@ impl Demuxer for MatroskaDemuxer {
 
     fn estimated_frame_duration_seconds(&self, stream_index: usize) -> Option<f64> {
         let tr = self.tracks.get(stream_index)?;
-        if let Some(dd_ns) = tr.default_duration_ticks {
-            if dd_ns > 0 {
-                let sec = dd_ns as f64 / 1_000_000_000.0;
-                if sec > 0.0 && sec.is_finite() {
-                    return Some(sec);
-                }
+        if let Some(dd_ns) = tr.default_duration_ticks.filter(|&d| d > 0) {
+            let sec = dd_ns as f64 / 1_000_000_000.0;
+            if sec > 0.0 && sec.is_finite() {
+                return Some(sec);
             }
         }
         let stream_info = self.stream_infos.get(stream_index)?;

@@ -814,11 +814,7 @@ impl SampleTable {
                 let ts = s.pts.unwrap_or(s.dts);
                 ts <= timestamp
             });
-            if idx == 0 {
-                0
-            } else {
-                idx - 1
-            }
+            if idx == 0 { 0 } else { idx - 1 }
         } else {
             let mut best_idx = 0usize;
             let mut best_pts = i64::MIN;

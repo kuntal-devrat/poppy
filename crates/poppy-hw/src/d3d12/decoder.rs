@@ -137,7 +137,13 @@ impl D3D12VideoDecoder {
             None => true,
         };
         if need_alloc {
-            self.pool = Some(D3D12SurfacePool::new(&self.device, width, height, 16, is_10bit)?);
+            self.pool = Some(D3D12SurfacePool::new(
+                &self.device,
+                width,
+                height,
+                16,
+                is_10bit,
+            )?);
             self.cur_surface_idx = 0;
         }
         Ok(())

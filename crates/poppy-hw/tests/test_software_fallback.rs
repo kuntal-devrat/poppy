@@ -1,5 +1,5 @@
 use poppy_core::CodecId;
-use poppy_hw::sw::{create_software_decoder, OpenH264Decoder};
+use poppy_hw::sw::{OpenH264Decoder, create_software_decoder};
 use poppy_hw::{HwDecoder, HwError};
 
 #[test]

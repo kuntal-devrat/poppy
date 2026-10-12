@@ -3,7 +3,8 @@ use std::collections::VecDeque;
 use poppy_core::{AudioConfig, AudioFrame, AudioSampleFormat, ChannelLayout, CodecId, Packet};
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::{
-    CODEC_TYPE_AAC, CODEC_TYPE_FLAC, CODEC_TYPE_MP3, CODEC_TYPE_VORBIS, CodecParameters, DecoderOptions,
+    CODEC_TYPE_AAC, CODEC_TYPE_FLAC, CODEC_TYPE_MP3, CODEC_TYPE_VORBIS, CodecParameters,
+    DecoderOptions,
 };
 use symphonia::core::formats::Packet as SymphoniaPacket;
 

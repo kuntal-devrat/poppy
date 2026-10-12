@@ -30,9 +30,8 @@ fn build_synthetic_fmp4() -> Vec<u8> {
     // 2. moov
     // avcC box
     let avcc_payload = vec![
-        1, 0x64, 0x00, 0x1F, 0xFF, 0xE1, 0x00, 4,
-        0x67, 0x64, 0x00, 0x1F,
-        1, 0x00, 3, 0x68, 0xEB, 0xE3,
+        1, 0x64, 0x00, 0x1F, 0xFF, 0xE1, 0x00, 4, 0x67, 0x64, 0x00, 0x1F, 1, 0x00, 3, 0x68, 0xEB,
+        0xE3,
     ];
     let avcc_box = make_box(b"avcC", &avcc_payload);
 
@@ -146,7 +145,10 @@ fn build_synthetic_fmp4() -> Vec<u8> {
     fmp4.extend_from_slice(&sidx);
 
     // Helper to build a fragment (moof + mdat)
-    let build_fragment = |seq: u32, base_dt: u64, samples: Vec<(Vec<u8>, u32, bool, Option<i64>)>| -> (Vec<u8>, Vec<u8>) {
+    let build_fragment = |seq: u32,
+                          base_dt: u64,
+                          samples: Vec<(Vec<u8>, u32, bool, Option<i64>)>|
+     -> (Vec<u8>, Vec<u8>) {
         let mut mdat_data = Vec::new();
         for (data, _, _, _) in &samples {
             mdat_data.extend_from_slice(data);
@@ -182,7 +184,11 @@ fn build_synthetic_fmp4() -> Vec<u8> {
         for (data, dur, is_key, c_offset) in &samples {
             trun_payload.extend_from_slice(&dur.to_be_bytes());
             trun_payload.extend_from_slice(&(data.len() as u32).to_be_bytes());
-            let flags = if *is_key { 0x00000000u32 } else { 0x01010000u32 };
+            let flags = if *is_key {
+                0x00000000u32
+            } else {
+                0x01010000u32
+            };
             trun_payload.extend_from_slice(&flags.to_be_bytes());
             trun_payload.extend_from_slice(&(c_offset.unwrap_or(0) as u32).to_be_bytes());
         }
@@ -204,7 +210,8 @@ fn build_synthetic_fmp4() -> Vec<u8> {
 
         // data_offset = distance from moof start to mdat payload = moof_size + 8 (mdat header)
         let exact_data_offset = dummy_moof_size + 8;
-        trun_payload[data_offset_pos..data_offset_pos + 4].copy_from_slice(&exact_data_offset.to_be_bytes());
+        trun_payload[data_offset_pos..data_offset_pos + 4]
+            .copy_from_slice(&exact_data_offset.to_be_bytes());
 
         let final_trun = make_fullbox(b"trun", 0, trun_flags, &trun_payload);
         let mut final_traf_payload = Vec::new();
@@ -344,14 +351,21 @@ fn test_fmp4_demux_full_integration() {
     assert!(demuxer.read_packet().unwrap().is_none());
 
     // 5. Seek across fragment boundary to keyframe in fragment 2 (dts = 2002)
-    demuxer.seek_to_keyframe(0, 2002).expect("seek to fragment 2 keyframe");
+    demuxer
+        .seek_to_keyframe(0, 2002)
+        .expect("seek to fragment 2 keyframe");
     let p_seek = demuxer.read_packet().unwrap().expect("packet after seek");
     assert_eq!(p_seek.dts, 2002);
     assert!(p_seek.is_keyframe);
 
     // Seek back to fragment 1 keyframe (dts = 0)
-    demuxer.seek_to_keyframe(0, 0).expect("seek to fragment 1 keyframe");
-    let p_seek0 = demuxer.read_packet().unwrap().expect("packet after seek to 0");
+    demuxer
+        .seek_to_keyframe(0, 0)
+        .expect("seek to fragment 1 keyframe");
+    let p_seek0 = demuxer
+        .read_packet()
+        .unwrap()
+        .expect("packet after seek to 0");
     assert_eq!(p_seek0.dts, 0);
     assert!(p_seek0.is_keyframe);
 }
@@ -360,8 +374,7 @@ fn test_fmp4_demux_full_integration() {
 fn test_fmp4_streaming_reader() {
     let fmp4_bytes = build_synthetic_fmp4();
     let cursor = std::io::Cursor::new(fmp4_bytes);
-    let mut demuxer = Mp4Demuxer::open_streaming(cursor)
-        .expect("open_streaming on fMP4");
+    let mut demuxer = Mp4Demuxer::open_streaming(cursor).expect("open_streaming on fMP4");
 
     assert_eq!(demuxer.streams().len(), 1);
     let p = demuxer.read_packet().unwrap().expect("first packet");
@@ -379,4 +392,3 @@ fn test_fmp4_corrupt_moof_handling() {
     let res = Mp4Demuxer::from_bytes(Bytes::from(fmp4_bytes));
     let _ = res; // May be Err or partial Ok, but must never panic
 }
-

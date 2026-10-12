@@ -210,7 +210,8 @@ impl AsyncMediaStream {
         let dur = if frame_duration_seconds > 0.0 && frame_duration_seconds.is_finite() {
             frame_duration_seconds
         } else {
-            self.estimated_frame_duration_seconds().unwrap_or(1.0 / 30.0)
+            self.estimated_frame_duration_seconds()
+                .unwrap_or(1.0 / 30.0)
         };
         let cur_sec = self
             .last_pts
@@ -253,12 +254,8 @@ impl AsyncMediaStream {
 
     /// Returns the estimated or average frame duration in seconds from container metadata.
     pub fn estimated_frame_duration_seconds(&self) -> Option<f64> {
-        if let Some(dur) = self.estimated_frame_duration {
-            if dur > 0.0 && dur.is_finite() {
-                return Some(dur);
-            }
-        }
-        None
+        self.estimated_frame_duration
+            .filter(|&dur| dur > 0.0 && dur.is_finite())
     }
 
     /// Indicates whether a hardware decoder is actively bound to this stream.

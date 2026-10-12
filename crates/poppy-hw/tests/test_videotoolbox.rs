@@ -16,7 +16,13 @@ fn test_videotoolbox_initialization_and_extradata() {
         return;
     }
     #[allow(unreachable_code)]
-    let mut decoder = VideoToolboxDecoder::new(CodecId::H264).expect("create VideoToolbox decoder");
+    let mut decoder = match VideoToolboxDecoder::new(CodecId::H264) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("Skipping test: VideoToolbox unavailable ({e})");
+            return;
+        }
+    };
     assert_eq!(decoder.codec, CodecId::H264);
 
     // Mock avcC extradata
@@ -185,7 +191,13 @@ fn test_videotoolbox_resilience_corrupted_packets() {
         return;
     }
     #[allow(unreachable_code)]
-    let mut decoder = VideoToolboxDecoder::new(CodecId::H264).expect("create VideoToolbox decoder");
+    let mut decoder = match VideoToolboxDecoder::new(CodecId::H264) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("Skipping test: VideoToolbox unavailable ({e})");
+            return;
+        }
+    };
 
     let malformed = [
         vec![0x11, 0x22, 0x33, 0x44],

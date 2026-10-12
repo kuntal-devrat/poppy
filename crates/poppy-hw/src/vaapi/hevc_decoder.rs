@@ -677,9 +677,17 @@ impl HwDecoder for VaapiHevcDecoder {
                         for i in 0..(slice.num_ref_idx_l0_active.min(15) as usize) {
                             if pw.luma_weight_l0_flag.get(i).copied().unwrap_or(false) {
                                 slice_param.delta_luma_weight_l0[i] =
-                                    pw.delta_luma_weight_l0.get(i).copied().unwrap_or(0).clamp(-127, 127) as i8;
+                                    pw.delta_luma_weight_l0
+                                        .get(i)
+                                        .copied()
+                                        .unwrap_or(0)
+                                        .clamp(-127, 127) as i8;
                                 slice_param.luma_offset_l0[i] =
-                                    pw.luma_offset_l0.get(i).copied().unwrap_or(0).clamp(-127, 127) as i8;
+                                    pw.luma_offset_l0
+                                        .get(i)
+                                        .copied()
+                                        .unwrap_or(0)
+                                        .clamp(-127, 127) as i8;
                             }
                             if pw.chroma_weight_l0_flag.get(i).copied().unwrap_or(false) {
                                 for c in 0..2 {
@@ -703,9 +711,17 @@ impl HwDecoder for VaapiHevcDecoder {
                         for i in 0..(slice.num_ref_idx_l1_active.min(15) as usize) {
                             if pw.luma_weight_l1_flag.get(i).copied().unwrap_or(false) {
                                 slice_param.delta_luma_weight_l1[i] =
-                                    pw.delta_luma_weight_l1.get(i).copied().unwrap_or(0).clamp(-127, 127) as i8;
+                                    pw.delta_luma_weight_l1
+                                        .get(i)
+                                        .copied()
+                                        .unwrap_or(0)
+                                        .clamp(-127, 127) as i8;
                                 slice_param.luma_offset_l1[i] =
-                                    pw.luma_offset_l1.get(i).copied().unwrap_or(0).clamp(-127, 127) as i8;
+                                    pw.luma_offset_l1
+                                        .get(i)
+                                        .copied()
+                                        .unwrap_or(0)
+                                        .clamp(-127, 127) as i8;
                             }
                             if pw.chroma_weight_l1_flag.get(i).copied().unwrap_or(false) {
                                 for c in 0..2 {

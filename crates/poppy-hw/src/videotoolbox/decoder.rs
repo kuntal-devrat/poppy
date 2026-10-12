@@ -10,7 +10,7 @@
 
 use super::ffi::*;
 use crate::{CvPixelBufferDescriptor, DecodedFrame, HwDecoder, HwError};
-use poppy_core::{CodecId, InterlaceMode, PixelFormat, Packet};
+use poppy_core::{CodecId, InterlaceMode, Packet, PixelFormat};
 use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::ptr;
@@ -129,8 +129,10 @@ impl VideoToolboxDecoder {
         let mut format_desc: CMVideoFormatDescriptionRef = ptr::null_mut();
 
         let status = unsafe {
-            (self.funcs.cm_video_format_description_create_from_h264_parameter_sets)(
-                ptr::null(),           // kCFAllocatorDefault
+            (self
+                .funcs
+                .cm_video_format_description_create_from_h264_parameter_sets)(
+                ptr::null(), // kCFAllocatorDefault
                 param_ptrs.len(),
                 param_ptrs.as_ptr(),
                 param_sizes.as_ptr(),
@@ -189,13 +191,15 @@ impl VideoToolboxDecoder {
         let mut format_desc: CMVideoFormatDescriptionRef = ptr::null_mut();
 
         let status = unsafe {
-            (self.funcs.cm_video_format_description_create_from_hevc_parameter_sets)(
-                ptr::null(),           // kCFAllocatorDefault
+            (self
+                .funcs
+                .cm_video_format_description_create_from_hevc_parameter_sets)(
+                ptr::null(), // kCFAllocatorDefault
                 param_ptrs.len(),
                 param_ptrs.as_ptr(),
                 param_sizes.as_ptr(),
                 nal_length,
-                ptr::null(),           // extensions
+                ptr::null(), // extensions
                 &mut format_desc,
             )
         };
@@ -244,9 +248,9 @@ impl VideoToolboxDecoder {
         let mut session: VTDecompressionSessionRef = ptr::null_mut();
         let status = unsafe {
             (self.funcs.vt_decompression_session_create)(
-                ptr::null(),           // kCFAllocatorDefault
+                ptr::null(), // kCFAllocatorDefault
                 self.format_desc,
-                ptr::null(),           // videoDecoderSpecification
+                ptr::null(), // videoDecoderSpecification
                 dest_attrs as CFDictionaryRef,
                 &callback_record as *const _ as *const _,
                 &mut session,
@@ -334,14 +338,14 @@ impl VideoToolboxDecoder {
         let mut block_buffer: CMBlockBufferRef = ptr::null_mut();
         let status = unsafe {
             (self.funcs.cm_block_buffer_create_with_memory_block)(
-                ptr::null(),               // kCFAllocatorDefault
+                ptr::null(), // kCFAllocatorDefault
                 data.as_ptr() as *const c_void,
                 data.len(),
-                ptr::null(),               // kCFAllocatorNull (we manage the memory)
-                ptr::null(),               // customBlockSource
-                0,                         // offsetToData
+                ptr::null(), // kCFAllocatorNull (we manage the memory)
+                ptr::null(), // customBlockSource
+                0,           // offsetToData
                 data.len(),
-                0,                         // flags
+                0, // flags
                 &mut block_buffer,
             )
         };
@@ -368,16 +372,16 @@ impl VideoToolboxDecoder {
         let mut sample_buffer: CMSampleBufferRef = ptr::null_mut();
         let status = unsafe {
             (self.funcs.cm_sample_buffer_create)(
-                ptr::null(),               // kCFAllocatorDefault
+                ptr::null(), // kCFAllocatorDefault
                 block_buffer,
-                1,                         // dataReady = true
-                ptr::null(),               // makeDataReadyCallback
-                ptr::null(),               // makeDataReadyRefcon
+                1,           // dataReady = true
+                ptr::null(), // makeDataReadyCallback
+                ptr::null(), // makeDataReadyRefcon
                 self.format_desc,
-                1,                         // numSamples
-                1,                         // numSampleTimingEntries
+                1, // numSamples
+                1, // numSampleTimingEntries
                 &timing_info,
-                1,                         // numSampleSizeEntries
+                1, // numSampleSizeEntries
                 &sample_size,
                 &mut sample_buffer,
             )
@@ -414,9 +418,7 @@ impl VideoToolboxDecoder {
             (self.funcs.cf_release)(sample_buffer as CFTypeRef);
         }
 
-        if status != NO_ERR
-            && status != K_VT_VIDEO_DECODER_NOT_AVAILABLE_NOW_ERR
-        {
+        if status != NO_ERR && status != K_VT_VIDEO_DECODER_NOT_AVAILABLE_NOW_ERR {
             return Err(HwError::DecodeError(format!(
                 "VTDecompressionSessionDecodeFrame failed: OSStatus {status}"
             )));
@@ -431,8 +433,10 @@ impl Drop for VideoToolboxDecoder {
         if !self.session.is_null() {
             unsafe {
                 // Wait for any async frames to finish
-                let _ = (self.funcs.vt_decompression_session_wait_for_asynchronous_frames)(
-                    self.session,
+                let _ = (self
+                    .funcs
+                    .vt_decompression_session_wait_for_asynchronous_frames)(
+                    self.session
                 );
                 (self.funcs.vt_decompression_session_invalidate)(self.session);
                 (self.funcs.cf_release)(self.session as CFTypeRef);
@@ -452,16 +456,21 @@ impl HwDecoder for VideoToolboxDecoder {
     }
 
     fn receive_frame(&mut self) -> Result<Option<DecodedFrame>, HwError> {
-        let mut queue = self.output_queue.lock().map_err(|e| {
-            HwError::DecodeError(format!("output queue mutex poisoned: {e}"))
-        })?;
+        let mut queue = self
+            .output_queue
+            .lock()
+            .map_err(|e| HwError::DecodeError(format!("output queue mutex poisoned: {e}")))?;
         Ok(queue.frames.pop_front())
     }
 
     fn flush(&mut self) -> Result<(), HwError> {
         if !self.session.is_null() {
             let status = unsafe {
-                (self.funcs.vt_decompression_session_wait_for_asynchronous_frames)(self.session)
+                (self
+                    .funcs
+                    .vt_decompression_session_wait_for_asynchronous_frames)(
+                    self.session
+                )
             };
             if status != NO_ERR {
                 return Err(HwError::DecodeError(format!(
@@ -474,9 +483,10 @@ impl HwDecoder for VideoToolboxDecoder {
 
     fn reset(&mut self) -> Result<(), HwError> {
         self.flush()?;
-        let mut queue = self.output_queue.lock().map_err(|e| {
-            HwError::DecodeError(format!("output queue mutex poisoned: {e}"))
-        })?;
+        let mut queue = self
+            .output_queue
+            .lock()
+            .map_err(|e| HwError::DecodeError(format!("output queue mutex poisoned: {e}")))?;
         queue.frames.clear();
         Ok(())
     }
@@ -512,8 +522,7 @@ unsafe extern "C" fn vt_output_callback(
     let pixel_format_type = unsafe { (funcs.cv_pixel_buffer_get_pixel_format_type)(image_buffer) };
     let io_surface = unsafe { (funcs.cv_pixel_buffer_get_io_surface)(image_buffer) };
 
-    let is_10bit =
-        pixel_format_type == K_CV_PIXEL_FORMAT_TYPE_420_YP_CB_CR10_BI_PLANAR_VIDEO_RANGE;
+    let is_10bit = pixel_format_type == K_CV_PIXEL_FORMAT_TYPE_420_YP_CB_CR10_BI_PLANAR_VIDEO_RANGE;
     let pixel_format = if is_10bit {
         PixelFormat::P010
     } else {

@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use poppy_core::CodecId;
-use poppy_demux::mpegts::MpegTsDemuxer;
 use poppy_demux::Demuxer;
+use poppy_demux::mpegts::MpegTsDemuxer;
 
 /// Helper function to construct a valid PAT (PID 0) TS packet (188 bytes).
 fn make_pat_packet(pmt_pid: u16) -> [u8; 188] {
@@ -122,11 +122,11 @@ fn make_pes_packet_part1(
     pkt[payload_start + 8] = 0x05; // PES header data length = 5 bytes
 
     // 5-byte 33-bit PTS encoding: 0010 PTS[32..30] 1 PTS[29..15] 1 PTS[14..0] 1
-    let b0 = 0x21 | (((pts >> 29) as u8 & 0x0E));
-    let b1 = ((pts >> 22) as u8) & 0xFF;
-    let b2 = 0x01 | (((pts >> 14) as u8 & 0xFE));
-    let b3 = ((pts >> 7) as u8) & 0xFF;
-    let b4 = 0x01 | (((pts << 1) as u8 & 0xFE));
+    let b0 = 0x21 | ((pts >> 29) as u8 & 0x0E);
+    let b1 = (pts >> 22) as u8;
+    let b2 = 0x01 | ((pts >> 14) as u8 & 0xFE);
+    let b3 = (pts >> 7) as u8;
+    let b4 = 0x01 | ((pts << 1) as u8 & 0xFE);
 
     pkt[payload_start + 9] = b0;
     pkt[payload_start + 10] = b1;
@@ -204,11 +204,7 @@ fn test_mpegts_pes_reassembly_multi_packet_and_pts() {
     ));
 
     // Packet 2: Continuation packet with PUSI = 0
-    stream_bytes.extend_from_slice(&make_pes_packet_part2(
-        video_pid,
-        1,
-        &nalu_payload[150..],
-    ));
+    stream_bytes.extend_from_slice(&make_pes_packet_part2(video_pid, 1, &nalu_payload[150..]));
 
     // Frame 2: PUSI = 1 with PTS = 93000 to trigger finalization of Frame 1
     stream_bytes.extend_from_slice(&make_pes_packet_part1(
@@ -219,17 +215,23 @@ fn test_mpegts_pes_reassembly_multi_packet_and_pts() {
         &[0x00, 0x00, 0x00, 0x01, 0x41, 0x9A],
     ));
 
-    let mut demuxer = MpegTsDemuxer::from_bytes(Bytes::from(stream_bytes))
-        .expect("demuxer initialization");
+    let mut demuxer =
+        MpegTsDemuxer::from_bytes(Bytes::from(stream_bytes)).expect("demuxer initialization");
 
-    let pkt1 = demuxer.read_packet().expect("read packet 1").expect("first packet");
+    let pkt1 = demuxer
+        .read_packet()
+        .expect("read packet 1")
+        .expect("first packet");
     assert_eq!(pkt1.stream_index, 0);
     assert_eq!(pkt1.pts, Some(pts_target));
     assert!(pkt1.is_keyframe);
     assert!(pkt1.data.len() >= 300);
     assert!(pkt1.data.starts_with(&[0x00, 0x00, 0x00, 0x01, 0x65]));
 
-    let pkt2 = demuxer.read_packet().expect("read packet 2").expect("second packet");
+    let pkt2 = demuxer
+        .read_packet()
+        .expect("read packet 2")
+        .expect("second packet");
     assert_eq!(pkt2.stream_index, 0);
     assert_eq!(pkt2.pts, Some(93_000));
 }
@@ -305,12 +307,17 @@ fn test_mpegts_seeking_to_keyframe() {
         &[0x00, 0x00, 0x00, 0x01, 0x41, 0x04],
     ));
 
-    let mut demuxer = MpegTsDemuxer::from_bytes(Bytes::from(stream_bytes))
-        .expect("demuxer initialization");
+    let mut demuxer =
+        MpegTsDemuxer::from_bytes(Bytes::from(stream_bytes)).expect("demuxer initialization");
 
     // Seek to PTS 6000
-    demuxer.seek_to_keyframe(0, 6_000).expect("seek to keyframe");
-    let pkt = demuxer.read_packet().expect("read packet").expect("packet after seek");
+    demuxer
+        .seek_to_keyframe(0, 6_000)
+        .expect("seek to keyframe");
+    let pkt = demuxer
+        .read_packet()
+        .expect("read packet")
+        .expect("packet after seek");
     assert_eq!(pkt.pts, Some(6_000));
     assert!(pkt.is_keyframe);
 }

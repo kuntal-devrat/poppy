@@ -7,11 +7,7 @@ fn get_sample(name: &str) -> Option<PathBuf> {
         .parent()
         .unwrap()
         .join(format!("tests/samples/{name}"));
-    if p.exists() {
-        Some(p)
-    } else {
-        None
-    }
+    if p.exists() { Some(p) } else { None }
 }
 
 #[test]
@@ -29,7 +25,10 @@ fn test_av_sync_aac_mp4() {
         .open_sync(&sample)
         .expect("open test_av_aac.mp4");
 
-    assert!(stream.has_audio(), "test_av_aac.mp4 must have an audio track");
+    assert!(
+        stream.has_audio(),
+        "test_av_aac.mp4 must have an audio track"
+    );
     let video_tb = stream.time_base();
 
     // Find audio timebase from streams
@@ -111,7 +110,10 @@ fn test_av_sync_opus_webm() {
         .open_sync(&sample)
         .expect("open test_av_opus.webm");
 
-    assert!(stream.has_audio(), "test_av_opus.webm must have an audio track");
+    assert!(
+        stream.has_audio(),
+        "test_av_opus.webm must have an audio track"
+    );
     let video_tb = stream.time_base();
 
     let audio_stream_info = stream
@@ -125,17 +127,17 @@ fn test_av_sync_opus_webm() {
         .next_audio_frame()
         .expect("next_audio_frame")
         .expect("audio frame");
-    assert!(a_frame.samples.len() > 0);
+    assert!(!a_frame.samples.is_empty());
     assert_eq!(a_frame.sample_rate, 48000);
 
-    if stream.has_hardware_decoder() {
-        if let Some(v_frame) = stream.next_frame().expect("next_frame") {
-            let v_sec = v_frame.pts.map(|p| video_tb.to_seconds(p)).unwrap_or(0.0);
-            let a_sec = a_frame.pts.map(|p| audio_tb.to_seconds(p)).unwrap_or(0.0);
-            assert!(
-                (v_sec - a_sec).abs() < 0.25,
-                "Opus WebM A/V skew exceeds tolerance: video {v_sec}s vs audio {a_sec}s"
-            );
-        }
+    if stream.has_hardware_decoder()
+        && let Some(v_frame) = stream.next_frame().expect("next_frame")
+    {
+        let v_sec = v_frame.pts.map(|p| video_tb.to_seconds(p)).unwrap_or(0.0);
+        let a_sec = a_frame.pts.map(|p| audio_tb.to_seconds(p)).unwrap_or(0.0);
+        assert!(
+            (v_sec - a_sec).abs() < 0.25,
+            "Opus WebM A/V skew exceeds tolerance: video {v_sec}s vs audio {a_sec}s"
+        );
     }
 }

@@ -913,6 +913,10 @@ pub unsafe extern "C" fn poppy_free_frame(frame: *mut PoppyFrame) -> c_int {
 
 /// Returns 1 if the media stream contains an initialized audio stream, 0 otherwise.
 /// Returns `POPPY_ERR_NULL_PTR` if `stream` is null.
+///
+/// # Safety
+///
+/// `stream` must point to a valid `PoppyStream` allocated by `poppy_open()`, or be null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn poppy_has_audio(stream: *mut PoppyStream) -> c_int {
     if stream.is_null() {
@@ -1032,6 +1036,10 @@ pub unsafe extern "C" fn poppy_free_audio_frame(frame: *mut PoppyAudioFrame) -> 
 }
 
 /// Returns the sample rate of the audio frame in Hz (e.g. 44100, 48000).
+///
+/// # Safety
+///
+/// `frame` must point to a valid `PoppyAudioFrame` allocated by `poppy_read_audio_frame()`, or be null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn poppy_audio_frame_get_sample_rate(frame: *const PoppyAudioFrame) -> u32 {
     if frame.is_null() {
@@ -1042,6 +1050,10 @@ pub unsafe extern "C" fn poppy_audio_frame_get_sample_rate(frame: *const PoppyAu
 }
 
 /// Returns the channel count of the audio frame (e.g. 1 for mono, 2 for stereo).
+///
+/// # Safety
+///
+/// `frame` must point to a valid `PoppyAudioFrame` allocated by `poppy_read_audio_frame()`, or be null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn poppy_audio_frame_get_channels(frame: *const PoppyAudioFrame) -> u16 {
     if frame.is_null() {
@@ -1052,8 +1064,14 @@ pub unsafe extern "C" fn poppy_audio_frame_get_channels(frame: *const PoppyAudio
 }
 
 /// Returns the total number of f32 samples across all channels in the audio frame.
+///
+/// # Safety
+///
+/// `frame` must point to a valid `PoppyAudioFrame` allocated by `poppy_read_audio_frame()`, or be null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn poppy_audio_frame_get_sample_count(frame: *const PoppyAudioFrame) -> usize {
+pub unsafe extern "C" fn poppy_audio_frame_get_sample_count(
+    frame: *const PoppyAudioFrame,
+) -> usize {
     if frame.is_null() {
         return 0;
     }
@@ -1062,6 +1080,10 @@ pub unsafe extern "C" fn poppy_audio_frame_get_sample_count(frame: *const PoppyA
 }
 
 /// Returns the presentation timestamp of the audio frame in seconds.
+///
+/// # Safety
+///
+/// `frame` must point to a valid `PoppyAudioFrame` allocated by `poppy_read_audio_frame()`, or be null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn poppy_audio_frame_get_pts_seconds(
     frame: *const PoppyAudioFrame,

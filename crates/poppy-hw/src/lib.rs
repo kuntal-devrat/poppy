@@ -95,15 +95,22 @@ impl DmaBufDescriptor {
     /// this returns an error rather than silently creating a broken descriptor with fd = -1.
     pub fn try_clone(&self) -> Result<Self, HwError> {
         let dup_fd = if self.fd >= 0 {
-            let res = unsafe { libc::dup(self.fd) };
-            if res < 0 {
-                return Err(HwError::DecodeError(format!(
-                    "dup() failed for DMA-BUF fd {}: {}",
-                    self.fd,
-                    std::io::Error::last_os_error()
-                )));
+            #[cfg(unix)]
+            {
+                let res = unsafe { libc::dup(self.fd) };
+                if res < 0 {
+                    return Err(HwError::DecodeError(format!(
+                        "dup() failed for DMA-BUF fd {}: {}",
+                        self.fd,
+                        std::io::Error::last_os_error()
+                    )));
+                }
+                res
             }
-            res
+            #[cfg(not(unix))]
+            {
+                self.fd
+            }
         } else {
             -1
         };
@@ -129,6 +136,7 @@ impl Clone for DmaBufDescriptor {
 
 impl Drop for DmaBufDescriptor {
     fn drop(&mut self) {
+        #[cfg(unix)]
         if self.fd >= 0 {
             unsafe {
                 libc::close(self.fd);

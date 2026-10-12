@@ -49,7 +49,7 @@ impl Default for SDecodingParam {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct SSystemBuffer {
     pub i_width: c_int,
     pub i_height: c_int,
@@ -57,35 +57,13 @@ pub struct SSystemBuffer {
     pub i_stride: [c_int; 2],
 }
 
-impl Default for SSystemBuffer {
-    fn default() -> Self {
-        Self {
-            i_width: 0,
-            i_height: 0,
-            i_format: 0,
-            i_stride: [0; 2],
-        }
-    }
-}
-
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct SBufferInfo {
     pub i_buffer_status: c_int,
     pub ui_in_bs_timestamp: c_ulonglong,
     pub ui_out_yuv_timestamp: c_ulonglong,
     pub usr_data: SSystemBuffer,
-}
-
-impl Default for SBufferInfo {
-    fn default() -> Self {
-        Self {
-            i_buffer_status: 0,
-            ui_in_bs_timestamp: 0,
-            ui_out_yuv_timestamp: 0,
-            usr_data: SSystemBuffer::default(),
-        }
-    }
 }
 
 // OpenH264 ISVCDecoder Vtable layout
@@ -122,8 +100,16 @@ struct ISVCDecoderVtbl {
         i_src_len: c_int,
         p_dst_info: *mut c_void,
     ) -> c_long,
-    set_option: unsafe extern "C" fn(this: *mut c_void, e_option_id: c_int, p_option: *mut c_void) -> c_long,
-    get_option: unsafe extern "C" fn(this: *mut c_void, e_option_id: c_int, p_option: *mut c_void) -> c_long,
+    set_option: unsafe extern "C" fn(
+        this: *mut c_void,
+        e_option_id: c_int,
+        p_option: *mut c_void,
+    ) -> c_long,
+    get_option: unsafe extern "C" fn(
+        this: *mut c_void,
+        e_option_id: c_int,
+        p_option: *mut c_void,
+    ) -> c_long,
 }
 
 type WelsCreateDecoderFn = unsafe extern "C" fn(pp_decoder: *mut *mut c_void) -> c_int;
@@ -154,10 +140,7 @@ impl OpenH264Lib {
         ];
 
         #[cfg(target_os = "windows")]
-        let candidates = [
-            "openh264-7.dll",
-            "openh264.dll",
-        ];
+        let candidates = ["openh264-7.dll", "openh264.dll"];
 
         #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
         let candidates: [&str; 0] = [];
@@ -172,13 +155,19 @@ impl OpenH264Lib {
             unsafe {
                 let handle = libc::dlopen(c_name.as_ptr(), libc::RTLD_LAZY | libc::RTLD_LOCAL);
                 if !handle.is_null() {
-                    let create_sym = libc::dlsym(handle, b"WelsCreateDecoder\0".as_ptr() as *const c_char);
-                    let destroy_sym = libc::dlsym(handle, b"WelsDestroyDecoder\0".as_ptr() as *const c_char);
+                    let create_sym = libc::dlsym(handle, c"WelsCreateDecoder".as_ptr());
+                    let destroy_sym = libc::dlsym(handle, c"WelsDestroyDecoder".as_ptr());
 
                     if !create_sym.is_null() && !destroy_sym.is_null() {
                         return Some(Self {
-                            create_decoder: std::mem::transmute(create_sym),
-                            destroy_decoder: std::mem::transmute(destroy_sym),
+                            create_decoder: std::mem::transmute::<
+                                *mut libc::c_void,
+                                WelsCreateDecoderFn,
+                            >(create_sym),
+                            destroy_decoder: std::mem::transmute::<
+                                *mut libc::c_void,
+                                WelsDestroyDecoderFn,
+                            >(destroy_sym),
                         });
                     }
                 }
@@ -188,17 +177,24 @@ impl OpenH264Lib {
             unsafe {
                 extern "system" {
                     fn LoadLibraryA(lpLibFileName: *const c_char) -> *mut c_void;
-                    fn GetProcAddress(hModule: *mut c_void, lpProcName: *const c_char) -> *mut c_void;
+                    fn GetProcAddress(
+                        hModule: *mut c_void,
+                        lpProcName: *const c_char,
+                    ) -> *mut c_void;
                 }
                 let handle = LoadLibraryA(c_name.as_ptr());
                 if !handle.is_null() {
-                    let create_sym = GetProcAddress(handle, b"WelsCreateDecoder\0".as_ptr() as *const c_char);
-                    let destroy_sym = GetProcAddress(handle, b"WelsDestroyDecoder\0".as_ptr() as *const c_char);
+                    let create_sym = GetProcAddress(handle, c"WelsCreateDecoder".as_ptr());
+                    let destroy_sym = GetProcAddress(handle, c"WelsDestroyDecoder".as_ptr());
 
                     if !create_sym.is_null() && !destroy_sym.is_null() {
                         return Some(Self {
-                            create_decoder: std::mem::transmute(create_sym),
-                            destroy_decoder: std::mem::transmute(destroy_sym),
+                            create_decoder: std::mem::transmute::<*mut c_void, WelsCreateDecoderFn>(
+                                create_sym,
+                            ),
+                            destroy_decoder: std::mem::transmute::<*mut c_void, WelsDestroyDecoderFn>(
+                                destroy_sym,
+                            ),
                         });
                     }
                 }
@@ -262,7 +258,11 @@ impl OpenH264Decoder {
     }
 
     /// Feeds parameter sets (SPS / PPS) to the decoder.
-    pub fn set_parameter_sets(&mut self, sps_list: &[Bytes], pps_list: &[Bytes]) -> Result<(), HwError> {
+    pub fn set_parameter_sets(
+        &mut self,
+        sps_list: &[Bytes],
+        pps_list: &[Bytes],
+    ) -> Result<(), HwError> {
         for sps in sps_list {
             let mut annex_b = vec![0, 0, 0, 1];
             annex_b.extend_from_slice(sps);
@@ -329,7 +329,12 @@ impl HwDecoder for OpenH264Decoder {
             let stride_y = buf_info.usr_data.i_stride[0] as usize;
             let stride_uv = buf_info.usr_data.i_stride[1] as usize;
 
-            if width > 0 && height > 0 && !dst_planes[0].is_null() && !dst_planes[1].is_null() && !dst_planes[2].is_null() {
+            if width > 0
+                && height > 0
+                && !dst_planes[0].is_null()
+                && !dst_planes[1].is_null()
+                && !dst_planes[2].is_null()
+            {
                 // Pack I420/YV12 planes into NV12 layout for zero-copy wgpu renderer upload
                 let y_size = (width * height) as usize;
                 let uv_size = ((width / 2) * (height / 2) * 2) as usize;
@@ -340,8 +345,13 @@ impl HwDecoder for OpenH264Decoder {
                     let src_y = dst_planes[0];
                     for row in 0..height as usize {
                         let src_row = src_y.add(row * stride_y);
-                        let dst_row = &mut nv12_buf[row * width as usize..(row + 1) * width as usize];
-                        std::ptr::copy_nonoverlapping(src_row, dst_row.as_mut_ptr(), width as usize);
+                        let dst_row =
+                            &mut nv12_buf[row * width as usize..(row + 1) * width as usize];
+                        std::ptr::copy_nonoverlapping(
+                            src_row,
+                            dst_row.as_mut_ptr(),
+                            width as usize,
+                        );
                     }
 
                     // Interleave U and V planes into NV12 UV plane

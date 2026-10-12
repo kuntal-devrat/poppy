@@ -441,10 +441,8 @@ pub struct D3d12Functions {
         pp_device: *mut *mut c_void,
     ) -> HRESULT,
 
-    pub create_dxgi_factory1: unsafe extern "system" fn(
-        riid: *const GUID,
-        pp_factory: *mut *mut c_void,
-    ) -> HRESULT,
+    pub create_dxgi_factory1:
+        unsafe extern "system" fn(riid: *const GUID, pp_factory: *mut *mut c_void) -> HRESULT,
 }
 
 // SAFETY: The function pointers point to system DLL functions that are
@@ -502,14 +500,12 @@ impl D3d12Functions {
             return None;
         }
 
-        let d3d12_create_device =
-            unsafe { sym(d3d12_handle, b"D3D12CreateDevice\0") };
+        let d3d12_create_device = unsafe { sym(d3d12_handle, b"D3D12CreateDevice\0") };
         if d3d12_create_device.is_null() {
             return None;
         }
 
-        let create_dxgi_factory1 =
-            unsafe { sym(dxgi_handle, b"CreateDXGIFactory1\0") };
+        let create_dxgi_factory1 = unsafe { sym(dxgi_handle, b"CreateDXGIFactory1\0") };
         if create_dxgi_factory1.is_null() {
             return None;
         }

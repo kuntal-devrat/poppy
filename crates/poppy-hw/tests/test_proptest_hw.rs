@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 use proptest::prelude::*;
 
 proptest! {
@@ -61,4 +63,3 @@ fn test_dmabuf_desc_invalid_fd_returns_err() {
     assert!(res.is_err());
     d.fd = -1;
 }
-

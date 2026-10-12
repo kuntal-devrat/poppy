@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 use poppy_core::codec::CodecConfig;
 use poppy_demux::bsf::avcc_to_annex_b;
 use poppy_demux::{Demuxer, Mp4Demuxer};

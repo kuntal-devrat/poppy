@@ -338,8 +338,7 @@ fn parse_mfra(data: &[u8], file_offset: u64) -> Vec<MfraEntry> {
         let version = body[0];
         let track_id = u32::from_be_bytes([body[4], body[5], body[6], body[7]]);
         let len_sizes = u32::from_be_bytes([body[8], body[9], body[10], body[11]]);
-        let entry_count =
-            u32::from_be_bytes([body[12], body[13], body[14], body[15]]) as usize;
+        let entry_count = u32::from_be_bytes([body[12], body[13], body[14], body[15]]) as usize;
         let mut cur = 16;
         if entry_count > 4096 {
             continue;

@@ -90,21 +90,30 @@ fn test_seek_edge_cases_non_finite_and_negative() {
 
     // 2. Negative timestamps: clamped gracefully to 0 or keyframe at 0
     let res_neg = stream.seek_seconds(-10.0);
-    assert!(res_neg.is_ok(), "Negative seek should succeed (clamp to start)");
+    assert!(
+        res_neg.is_ok(),
+        "Negative seek should succeed (clamp to start)"
+    );
 
     // 3. Seek past EOF: succeeds by finding the nearest keyframe at or before target
     let res_eof = stream.seek_seconds(999_999.0);
     assert!(res_eof.is_ok(), "Seek past EOF must succeed");
     if stream.has_hardware_decoder() {
         let frame_after_eof = stream.next_frame().expect("next_frame after EOF");
-        assert!(frame_after_eof.is_some(), "Seek past EOF yields the nearest keyframe");
+        assert!(
+            frame_after_eof.is_some(),
+            "Seek past EOF yields the nearest keyframe"
+        );
     }
 
     // 4. Seek back to 0 after EOF: stream recovers and yields frames again
     stream.seek_seconds(0.0).expect("seek back to 0 after EOF");
     if stream.has_hardware_decoder() {
         let frame_after_rewind = stream.next_frame().expect("next_frame after rewind");
-        assert!(frame_after_rewind.is_some(), "Stream must recover after seeking back to 0");
+        assert!(
+            frame_after_rewind.is_some(),
+            "Stream must recover after seeking back to 0"
+        );
     }
 }
 
@@ -136,4 +145,3 @@ fn test_seek_edge_cases_webm() {
     // Seek back to 0
     assert!(stream.seek_seconds(0.0).is_ok());
 }
-

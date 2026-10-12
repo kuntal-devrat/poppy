@@ -21,4 +21,3 @@ pub mod sink;
 pub use decoder::{AudioDecoder, create_audio_decoder};
 pub use error::AudioError;
 pub use sink::{AudioClock, AudioSink};
-

@@ -122,23 +122,25 @@ pub struct VtFunctions {
         extensions: CFDictionaryRef,
         format_description_out: *mut CMVideoFormatDescriptionRef,
     ) -> OSStatus,
-    pub cm_video_format_description_create_from_h264_parameter_sets: unsafe extern "C" fn(
-        allocator: CFAllocatorRef,
-        parameter_set_count: usize,
-        parameter_set_pointers: *const *const u8,
-        parameter_set_sizes: *const usize,
-        nal_unit_header_length: i32,
-        format_description_out: *mut CMVideoFormatDescriptionRef,
-    ) -> OSStatus,
-    pub cm_video_format_description_create_from_hevc_parameter_sets: unsafe extern "C" fn(
-        allocator: CFAllocatorRef,
-        parameter_set_count: usize,
-        parameter_set_pointers: *const *const u8,
-        parameter_set_sizes: *const usize,
-        nal_unit_header_length: i32,
-        extensions: CFDictionaryRef,
-        format_description_out: *mut CMVideoFormatDescriptionRef,
-    ) -> OSStatus,
+    pub cm_video_format_description_create_from_h264_parameter_sets:
+        unsafe extern "C" fn(
+            allocator: CFAllocatorRef,
+            parameter_set_count: usize,
+            parameter_set_pointers: *const *const u8,
+            parameter_set_sizes: *const usize,
+            nal_unit_header_length: i32,
+            format_description_out: *mut CMVideoFormatDescriptionRef,
+        ) -> OSStatus,
+    pub cm_video_format_description_create_from_hevc_parameter_sets:
+        unsafe extern "C" fn(
+            allocator: CFAllocatorRef,
+            parameter_set_count: usize,
+            parameter_set_pointers: *const *const u8,
+            parameter_set_sizes: *const usize,
+            nal_unit_header_length: i32,
+            extensions: CFDictionaryRef,
+            format_description_out: *mut CMVideoFormatDescriptionRef,
+        ) -> OSStatus,
 
     // CoreMedia – block/sample buffers
     pub cm_block_buffer_create_with_memory_block: unsafe extern "C" fn(
@@ -193,10 +195,8 @@ pub struct VtFunctions {
         unsafe extern "C" fn(pixel_buffer: CVPixelBufferRef, lock_flags: u64) -> i32,
     pub cv_pixel_buffer_unlock_base_address:
         unsafe extern "C" fn(pixel_buffer: CVPixelBufferRef, lock_flags: u64) -> i32,
-    pub cv_pixel_buffer_get_width:
-        unsafe extern "C" fn(pixel_buffer: CVPixelBufferRef) -> usize,
-    pub cv_pixel_buffer_get_height:
-        unsafe extern "C" fn(pixel_buffer: CVPixelBufferRef) -> usize,
+    pub cv_pixel_buffer_get_width: unsafe extern "C" fn(pixel_buffer: CVPixelBufferRef) -> usize,
+    pub cv_pixel_buffer_get_height: unsafe extern "C" fn(pixel_buffer: CVPixelBufferRef) -> usize,
     pub cv_pixel_buffer_get_base_address_of_plane:
         unsafe extern "C" fn(pixel_buffer: CVPixelBufferRef, plane_index: usize) -> *mut u8,
     pub cv_pixel_buffer_get_bytes_per_row_of_plane:
@@ -341,10 +341,7 @@ impl VtFunctions {
             cm_sample_buffer_create: load_sym!(cm_handle, "CMSampleBufferCreate"),
 
             // VideoToolbox
-            vt_decompression_session_create: load_sym!(
-                vt_handle,
-                "VTDecompressionSessionCreate"
-            ),
+            vt_decompression_session_create: load_sym!(vt_handle, "VTDecompressionSessionCreate"),
             vt_decompression_session_decode_frame: load_sym!(
                 vt_handle,
                 "VTDecompressionSessionDecodeFrame"
@@ -359,10 +356,7 @@ impl VtFunctions {
             ),
 
             // CoreVideo – pixel buffer access
-            cv_pixel_buffer_lock_base_address: load_sym!(
-                cv_handle,
-                "CVPixelBufferLockBaseAddress"
-            ),
+            cv_pixel_buffer_lock_base_address: load_sym!(cv_handle, "CVPixelBufferLockBaseAddress"),
             cv_pixel_buffer_unlock_base_address: load_sym!(
                 cv_handle,
                 "CVPixelBufferUnlockBaseAddress"
@@ -381,10 +375,7 @@ impl VtFunctions {
                 cv_handle,
                 "CVPixelBufferGetHeightOfPlane"
             ),
-            cv_pixel_buffer_get_io_surface: load_sym!(
-                cv_handle,
-                "CVPixelBufferGetIOSurface"
-            ),
+            cv_pixel_buffer_get_io_surface: load_sym!(cv_handle, "CVPixelBufferGetIOSurface"),
             cv_pixel_buffer_get_pixel_format_type: load_sym!(
                 cv_handle,
                 "CVPixelBufferGetPixelFormatType"

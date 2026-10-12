@@ -340,12 +340,15 @@ impl Demuxer for Mp4Demuxer {
 
     fn estimated_frame_duration_seconds(&self, stream_index: usize) -> Option<f64> {
         let track = self.tracks.get(stream_index)?;
-        if let Some(first_sample) = track.sample_table.samples.first() {
-            if first_sample.duration > 0 {
-                let sec = track.time_base.to_seconds(first_sample.duration as i64);
-                if sec > 0.0 && sec.is_finite() {
-                    return Some(sec);
-                }
+        if let Some(first_sample) = track
+            .sample_table
+            .samples
+            .first()
+            .filter(|s| s.duration > 0)
+        {
+            let sec = track.time_base.to_seconds(first_sample.duration as i64);
+            if sec > 0.0 && sec.is_finite() {
+                return Some(sec);
             }
         }
         if let Some(dur_ticks) = track.duration_ticks {
@@ -358,12 +361,16 @@ impl Demuxer for Mp4Demuxer {
                 }
             }
         }
-        if let Some(trex) = &track.trex {
-            if trex.default_sample_duration > 0 {
-                let sec = track.time_base.to_seconds(trex.default_sample_duration as i64);
-                if sec > 0.0 && sec.is_finite() {
-                    return Some(sec);
-                }
+        if let Some(trex) = track
+            .trex
+            .as_ref()
+            .filter(|t| t.default_sample_duration > 0)
+        {
+            let sec = track
+                .time_base
+                .to_seconds(trex.default_sample_duration as i64);
+            if sec > 0.0 && sec.is_finite() {
+                return Some(sec);
             }
         }
         None

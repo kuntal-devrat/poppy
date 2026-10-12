@@ -28,10 +28,21 @@ fn test_mkv_demux_real_av_opus_webm() {
 
     let mut demuxer = MatroskaDemuxer::open(&path).expect("open test_av_opus.webm");
     let streams = demuxer.streams().to_vec();
-    assert!(streams.len() >= 2, "Expected at least video and audio streams");
+    assert!(
+        streams.len() >= 2,
+        "Expected at least video and audio streams"
+    );
 
-    let video_stream = streams.iter().find(|s| s.is_video()).expect("video stream").clone();
-    let audio_stream = streams.iter().find(|s| s.is_audio()).expect("audio stream").clone();
+    let video_stream = streams
+        .iter()
+        .find(|s| s.is_video())
+        .expect("video stream")
+        .clone();
+    let audio_stream = streams
+        .iter()
+        .find(|s| s.is_audio())
+        .expect("audio stream")
+        .clone();
 
     assert_eq!(video_stream.codec, CodecId::Vp9);
     assert_eq!(audio_stream.codec, CodecId::Opus);
@@ -47,7 +58,10 @@ fn test_mkv_demux_real_av_opus_webm() {
         assert!(!pkt.data.is_empty(), "Packet data must not be empty");
         if pkt.stream_index == video_stream.index {
             if let Some(prev) = last_video_dts {
-                assert!(pkt.dts >= prev, "Video DTS must be monotonically non-decreasing");
+                assert!(
+                    pkt.dts >= prev,
+                    "Video DTS must be monotonically non-decreasing"
+                );
             }
             last_video_dts = Some(pkt.dts);
             video_packet_count += 1;
@@ -56,8 +70,14 @@ fn test_mkv_demux_real_av_opus_webm() {
         }
     }
 
-    assert!(video_packet_count > 0, "Must demux at least one video packet");
-    assert!(audio_packet_count > 0, "Must demux at least one audio packet");
+    assert!(
+        video_packet_count > 0,
+        "Must demux at least one video packet"
+    );
+    assert!(
+        audio_packet_count > 0,
+        "Must demux at least one audio packet"
+    );
 
     // Test seeking back to timestamp 0
     demuxer
@@ -84,7 +104,10 @@ fn test_mkv_streaming_demuxer() {
     let file = std::fs::File::open(&path).expect("open file");
     let mut demuxer = MatroskaDemuxer::open_streaming(file).expect("open_streaming on webm");
     assert!(demuxer.streams().len() >= 2);
-    let pkt = demuxer.read_packet().expect("read_packet").expect("first packet");
+    let pkt = demuxer
+        .read_packet()
+        .expect("read_packet")
+        .expect("first packet");
     assert!(!pkt.data.is_empty());
 }
 

@@ -274,14 +274,15 @@ impl MediaStream {
 
                 if let Ok(mut dec) = VaapiAv1Decoder::new(is_10bit) {
                     let mut init_ok = true;
-                    if let poppy_core::codec::CodecConfig::Av1(av1c) = &stream_info.config {
-                        if !av1c.config_obus.is_empty() {
-                            if let Err(e) = dec.set_extradata(&av1c.config_obus) {
-                                tracing::warn!(
-                                    "Failed to submit config OBUs to VA-API AV1 decoder: {e:?}"
-                                );
-                                init_ok = false;
-                            }
+                    if let poppy_core::codec::CodecConfig::Av1(av1c) = &stream_info.config
+                        && !av1c.config_obus.is_empty()
+                    {
+                        let res = dec.set_extradata(&av1c.config_obus);
+                        if let Err(e) = res {
+                            tracing::warn!(
+                                "Failed to submit config OBUs to VA-API AV1 decoder: {e:?}"
+                            );
+                            init_ok = false;
                         }
                     }
                     if init_ok {
@@ -302,14 +303,15 @@ impl MediaStream {
 
                 if let Ok(mut dec) = VaapiVp9Decoder::new(is_10bit) {
                     let mut init_ok = true;
-                    if let poppy_core::codec::CodecConfig::Vp9(vpcc) = &stream_info.config {
-                        if !vpcc.raw.is_empty() {
-                            if let Err(e) = dec.set_extradata(&vpcc.raw) {
-                                tracing::warn!(
-                                    "Failed to submit extradata to VA-API VP9 decoder: {e:?}"
-                                );
-                                init_ok = false;
-                            }
+                    if let poppy_core::codec::CodecConfig::Vp9(vpcc) = &stream_info.config
+                        && !vpcc.raw.is_empty()
+                    {
+                        let res = dec.set_extradata(&vpcc.raw);
+                        if let Err(e) = res {
+                            tracing::warn!(
+                                "Failed to submit extradata to VA-API VP9 decoder: {e:?}"
+                            );
+                            init_ok = false;
                         }
                     }
                     if init_ok {
@@ -340,7 +342,9 @@ impl MediaStream {
 
             #[cfg(target_os = "macos")]
             let decoder: Option<Box<dyn HwDecoder>> = {
-                if let Ok(mut dec) = poppy_hw::videotoolbox::VideoToolboxDecoder::new(stream_info.codec) {
+                if let Ok(mut dec) =
+                    poppy_hw::videotoolbox::VideoToolboxDecoder::new(stream_info.codec)
+                {
                     if let poppy_core::codec::CodecConfig::H264(avcc) = &stream_info.config {
                         let _ = dec.set_extradata(&avcc.raw);
                     } else if let poppy_core::codec::CodecConfig::Hevc(hvcc) = &stream_info.config {
@@ -653,18 +657,13 @@ impl MediaStream {
         match &self.config {
             CodecConfig::H264(avcc) => {
                 for sps_bytes in avcc.sps_list.iter().take(1) {
-                    if let Ok(sps) = poppy_h264::sps::Sps::parse(sps_bytes) {
-                        if let Some(vui) = &sps.vui
-                            && vui.colour_description_present
-                        {
-                            let hdr = vui.transfer_characteristics == 16
-                                || vui.transfer_characteristics == 18;
-                            return (
-                                vui.matrix_coefficients,
-                                vui.video_full_range,
-                                hdr,
-                            );
-                        }
+                    if let Ok(sps) = poppy_h264::sps::Sps::parse(sps_bytes)
+                        && let Some(vui) = &sps.vui
+                        && vui.colour_description_present
+                    {
+                        let hdr = vui.transfer_characteristics == 16
+                            || vui.transfer_characteristics == 18;
+                        return (vui.matrix_coefficients, vui.video_full_range, hdr);
                     }
                 }
                 (1, false, false) // BT.709 limited SDR
@@ -677,9 +676,8 @@ impl MediaStream {
                 // av1C config OBUs contain a Sequence Header with colour config.
                 // Parse first OBU if present.
                 if !av1c.config_obus.is_empty()
-                    && let Ok(seq) = poppy_av1::sequence_header::SequenceHeader::parse(
-                        &av1c.config_obus,
-                    )
+                    && let Ok(seq) =
+                        poppy_av1::sequence_header::SequenceHeader::parse(&av1c.config_obus)
                 {
                     let hdr = seq.high_bitdepth;
                     return (seq.matrix_coefficients, seq.color_range, hdr);
