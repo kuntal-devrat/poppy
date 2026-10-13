@@ -375,15 +375,39 @@ impl VideoToolboxDecoder {
         }
 
         // Create CMBlockBuffer from packet data
+        let (memory_ptr, block_allocator, is_malloced) = if !self
+            .funcs
+            .k_cf_allocator_null
+            .is_null()
+        {
+            (
+                nal_data.as_ptr() as *const c_void,
+                self.funcs.k_cf_allocator_null,
+                false,
+            )
+        } else {
+            // Defensive fallback: allocate with libc::malloc so kCFAllocatorDefault can safely free() it
+            let buf = unsafe { libc::malloc(nal_data.len()) };
+            if buf.is_null() {
+                return Err(HwError::SurfaceAllocationFailed(
+                    "malloc failed for packet buffer".into(),
+                ));
+            }
+            unsafe {
+                std::ptr::copy_nonoverlapping(nal_data.as_ptr(), buf as *mut u8, nal_data.len());
+            }
+            (buf as *const c_void, ptr::null(), true)
+        };
+
         let mut block_buffer: CMBlockBufferRef = ptr::null_mut();
         let status = unsafe {
             (self.funcs.cm_block_buffer_create_with_memory_block)(
-                ptr::null(), // kCFAllocatorDefault
-                nal_data.as_ptr() as *const c_void,
+                ptr::null(), // kCFAllocatorDefault for block structure
+                memory_ptr,
                 nal_data.len(),
-                ptr::null(), // kCFAllocatorNull (we manage the memory during sync decode)
-                ptr::null(), // customBlockSource
-                0,           // offsetToData
+                block_allocator, // kCFAllocatorNull tells CoreMedia not to deallocate our buffer
+                ptr::null(),     // customBlockSource
+                0,               // offsetToData
                 nal_data.len(),
                 0, // flags
                 &mut block_buffer,
@@ -391,6 +415,11 @@ impl VideoToolboxDecoder {
         };
 
         if status != NO_ERR || block_buffer.is_null() {
+            if is_malloced {
+                unsafe {
+                    libc::free(memory_ptr as *mut c_void);
+                }
+            }
             return Err(HwError::DecodeError(format!(
                 "CMBlockBufferCreateWithMemoryBlock failed: OSStatus {status}"
             )));
@@ -454,6 +483,14 @@ impl VideoToolboxDecoder {
         };
 
         unsafe {
+            let _ = (self
+                .funcs
+                .vt_decompression_session_wait_for_asynchronous_frames)(
+                self.session
+            );
+        }
+
+        unsafe {
             (self.funcs.cf_release)(sample_buffer as CFTypeRef);
         }
 
@@ -461,14 +498,6 @@ impl VideoToolboxDecoder {
             return Err(HwError::DecodeError(format!(
                 "VTDecompressionSessionDecodeFrame failed: OSStatus {status}"
             )));
-        }
-
-        unsafe {
-            let _ = (self
-                .funcs
-                .vt_decompression_session_wait_for_asynchronous_frames)(
-                self.session
-            );
         }
 
         Ok(())

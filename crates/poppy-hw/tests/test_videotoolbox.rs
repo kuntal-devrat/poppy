@@ -225,3 +225,16 @@ fn test_videotoolbox_resilience_corrupted_packets() {
 
     println!("✅ VideoToolbox decoder survived corrupt bitstreams gracefully");
 }
+
+#[test]
+fn test_videotoolbox_k_cf_allocator_null() {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(funcs) = poppy_hw::videotoolbox::ffi::VtFunctions::load() {
+            assert!(
+                !funcs.k_cf_allocator_null.is_null(),
+                "kCFAllocatorNull must be successfully loaded on macOS"
+            );
+        }
+    }
+}

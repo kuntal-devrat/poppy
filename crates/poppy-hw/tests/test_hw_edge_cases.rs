@@ -440,6 +440,7 @@ fn test_vp9_superframe_with_multiple_subframes() {
 }
 
 #[test]
+#[cfg(unix)]
 fn test_dmabuf_dup_exhaustion_try_clone() {
     let bad_desc = DmaBufDescriptor {
         fd: 999999, // Non-existent fd that fails dup() on Unix
@@ -479,6 +480,21 @@ fn test_dmabuf_dup_exhaustion_try_clone() {
 }
 
 #[test]
+#[cfg(not(unix))]
+fn test_dmabuf_dup_on_non_unix() {
+    let desc = DmaBufDescriptor {
+        fd: -1,
+        drm_format: 0x3231564E,
+        drm_modifier: 0,
+        width: 1920,
+        height: 1080,
+        offsets: vec![0, 1920 * 1080],
+        pitches: vec![1920, 1920],
+    };
+    assert!(desc.try_clone().is_ok());
+}
+
+#[test]
 fn test_empty_bytes_packet_handling() {
     let empty_pkt = Packet {
         stream_index: 0,
@@ -493,6 +509,15 @@ fn test_empty_bytes_packet_handling() {
 
     if let Ok(mut d3d12) = poppy_hw::d3d12::D3D12VideoDecoder::new(poppy_core::CodecId::H264) {
         assert!(d3d12.submit_packet(&empty_pkt).is_ok());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(mut dec) =
+            poppy_hw::videotoolbox::VideoToolboxDecoder::new(poppy_core::CodecId::H264)
+        {
+            assert!(dec.submit_packet(&empty_pkt).is_ok());
+        }
     }
 
     #[cfg(target_os = "linux")]

@@ -212,6 +212,7 @@ pub struct VtFunctions {
     pub k_cf_type_dictionary_value_callbacks: *const c_void,
     pub k_cv_pixel_buffer_pixel_format_type_key: *const c_void,
     pub k_cv_pixel_buffer_io_surface_properties_key: *const c_void,
+    pub k_cf_allocator_null: *const c_void,
 }
 
 // SAFETY: The function pointers point to system framework functions that are
@@ -405,6 +406,14 @@ impl VtFunctions {
                 let p = unsafe {
                     libc::dlsym(cv_handle, c"kCVPixelBufferIOSurfacePropertiesKey".as_ptr())
                 };
+                if !p.is_null() {
+                    unsafe { *(p as *const *const c_void) }
+                } else {
+                    std::ptr::null()
+                }
+            },
+            k_cf_allocator_null: {
+                let p = unsafe { libc::dlsym(cf_handle, c"kCFAllocatorNull".as_ptr()) };
                 if !p.is_null() {
                     unsafe { *(p as *const *const c_void) }
                 } else {
