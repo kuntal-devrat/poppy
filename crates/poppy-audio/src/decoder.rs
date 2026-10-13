@@ -130,6 +130,10 @@ impl SymphoniaAudioDecoder {
 
 impl AudioDecoder for SymphoniaAudioDecoder {
     fn submit_packet(&mut self, packet: &Packet) -> Result<(), AudioError> {
+        if packet.data.is_empty() {
+            return Ok(());
+        }
+
         let pts = packet.pts.unwrap_or(packet.dts).max(0) as u64;
         let sym_pkt = SymphoniaPacket::new_from_slice(0, pts, packet.duration as u64, &packet.data);
 
@@ -165,7 +169,12 @@ impl AudioDecoder for SymphoniaAudioDecoder {
     }
 
     fn receive_frame(&mut self) -> Result<Option<AudioFrame>, AudioError> {
-        Ok(self.output_queue.pop_front())
+        if let Some(frame) = self.output_queue.pop_front() {
+            frame.validate().map_err(AudioError::DecodeError)?;
+            Ok(Some(frame))
+        } else {
+            Ok(None)
+        }
     }
 
     fn flush(&mut self) -> Result<(), AudioError> {
@@ -232,6 +241,9 @@ impl OpusAudioDecoder {
 
 impl AudioDecoder for OpusAudioDecoder {
     fn submit_packet(&mut self, packet: &Packet) -> Result<(), AudioError> {
+        if packet.data.is_empty() {
+            return Ok(());
+        }
         let channels = self.channels as usize;
         let res = self
             .decoder
@@ -263,7 +275,12 @@ impl AudioDecoder for OpusAudioDecoder {
     }
 
     fn receive_frame(&mut self) -> Result<Option<AudioFrame>, AudioError> {
-        Ok(self.output_queue.pop_front())
+        if let Some(frame) = self.output_queue.pop_front() {
+            frame.validate().map_err(AudioError::DecodeError)?;
+            Ok(Some(frame))
+        } else {
+            Ok(None)
+        }
     }
 
     fn flush(&mut self) -> Result<(), AudioError> {

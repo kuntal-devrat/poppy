@@ -421,6 +421,10 @@ impl VaapiVp9Decoder {
 
 impl HwDecoder for VaapiVp9Decoder {
     fn submit_packet(&mut self, packet: &Packet) -> Result<(), HwError> {
+        if packet.data.is_empty() {
+            return Ok(());
+        }
+
         let sub_frames = match parse_superframe_frames(&packet.data) {
             Ok(frames) => frames,
             Err(_) => vec![&packet.data[..]],

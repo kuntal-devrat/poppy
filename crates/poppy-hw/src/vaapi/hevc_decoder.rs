@@ -63,6 +63,10 @@ impl VaapiHevcDecoder {
 
 impl HwDecoder for VaapiHevcDecoder {
     fn submit_packet(&mut self, packet: &Packet) -> Result<(), HwError> {
+        if packet.data.is_empty() {
+            return Ok(());
+        }
+
         let nalu_slices: Vec<&[u8]> = if packet.data.starts_with(&[0, 0, 0, 1])
             || packet.data.starts_with(&[0, 0, 1])
         {
@@ -519,7 +523,7 @@ impl HwDecoder for VaapiHevcDecoder {
                 }
             }
             pic_param.num_short_term_ref_pic_sets = sps.short_term_ref_pic_sets.len() as u8;
-            pic_param.num_long_term_ref_pic_sps = 0;
+            pic_param.num_long_term_ref_pic_sps = sps.num_long_term_ref_pics_sps as u8;
             pic_param.num_ref_idx_l0_default_active_minus1 =
                 pps.num_ref_idx_l0_default_active_minus1 as u8;
             pic_param.num_ref_idx_l1_default_active_minus1 =

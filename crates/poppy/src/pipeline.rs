@@ -90,17 +90,30 @@ impl MediaStream {
             }
             idx
         } else {
-            let mut idx = 0;
-            for (i, s) in demuxer.streams().iter().enumerate() {
-                if matches!(
-                    s.codec,
-                    CodecId::H264 | CodecId::Hevc | CodecId::Av1 | CodecId::Vp9
-                ) {
-                    idx = i;
-                    break;
-                }
+            let video_candidates: Vec<(usize, &StreamInfo)> = demuxer
+                .streams()
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| {
+                    matches!(
+                        s.codec,
+                        CodecId::H264 | CodecId::Hevc | CodecId::Av1 | CodecId::Vp9
+                    )
+                })
+                .collect();
+
+            if video_candidates.is_empty() {
+                0
+            } else {
+                video_candidates
+                    .into_iter()
+                    .max_by_key(|&(i, s)| {
+                        let area = (s.width as u64) * (s.height as u64);
+                        (s.enabled, area, std::cmp::Reverse(i))
+                    })
+                    .map(|(i, _)| i)
+                    .unwrap_or(0)
             }
-            idx
         };
 
         let stream_info = &demuxer.streams()[target_stream_index];
@@ -527,6 +540,9 @@ impl MediaStream {
     /// Read the next decoded audio frame from the media stream.
     pub fn next_audio_frame(&mut self) -> Result<Option<poppy_core::AudioFrame>, PoppyError> {
         if let Some(frame) = self.pending_audio_frames.pop_front() {
+            frame
+                .validate()
+                .map_err(|e| PoppyError::Audio(poppy_audio::AudioError::DecodeError(e)))?;
             return Ok(Some(frame));
         }
 
@@ -536,14 +552,14 @@ impl MediaStream {
         };
 
         loop {
-            if let Ok(Some(frame)) = a_dec.receive_frame() {
+            if let Some(frame) = a_dec.receive_frame()? {
                 return Ok(Some(frame));
             }
 
             // Check if we have queued audio packets ready to submit
             if let Some(pkt) = self.pending_audio_packets.pop_front() {
-                let _ = a_dec.submit_packet(&pkt);
-                if let Ok(Some(frame)) = a_dec.receive_frame() {
+                a_dec.submit_packet(&pkt)?;
+                if let Some(frame) = a_dec.receive_frame()? {
                     return Ok(Some(frame));
                 }
                 continue;
@@ -556,8 +572,8 @@ impl MediaStream {
             match self.demuxer.read_packet()? {
                 Some(pkt) => {
                     if Some(pkt.stream_index) == self.audio_stream_index {
-                        let _ = a_dec.submit_packet(&pkt);
-                        if let Ok(Some(frame)) = a_dec.receive_frame() {
+                        a_dec.submit_packet(&pkt)?;
+                        if let Some(frame) = a_dec.receive_frame()? {
                             return Ok(Some(frame));
                         }
                     } else if pkt.stream_index == self.target_stream_index {
@@ -708,6 +724,9 @@ fn filter_to_annex_b(
     config: &CodecConfig,
     pkt: Packet,
 ) -> Result<Packet, PoppyError> {
+    if pkt.data.is_empty() {
+        return Ok(pkt);
+    }
     match (codec, config) {
         (CodecId::H264, CodecConfig::H264(avcc)) => {
             let mut out = Vec::with_capacity(pkt.data.len() + 64);

@@ -194,6 +194,9 @@ impl MpegTsDemuxer {
                 time_base: timebase,
                 duration_ticks: None,
                 config: CodecConfig::Unknown,
+                width: 0,
+                height: 0,
+                enabled: true,
             };
             // Default configs
             match es.codec_id {

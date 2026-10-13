@@ -463,6 +463,14 @@ impl VideoToolboxDecoder {
             )));
         }
 
+        unsafe {
+            let _ = (self
+                .funcs
+                .vt_decompression_session_wait_for_asynchronous_frames)(
+                self.session
+            );
+        }
+
         Ok(())
     }
 }

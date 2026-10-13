@@ -181,6 +181,31 @@ pub struct DecodedFrame {
     pub is_concealed: bool,
 }
 
+impl DecodedFrame {
+    /// Attempts to clone the frame, duplicating any underlying OS handle (such as DMA-BUF fd).
+    ///
+    /// Returns an error if the underlying handle duplication fails (e.g. fd exhaustion).
+    pub fn try_clone(&self) -> Result<Self, HwError> {
+        let dmabuf = match &self.dmabuf {
+            Some(d) => Some(d.try_clone()?),
+            None => None,
+        };
+        Ok(Self {
+            pts: self.pts,
+            width: self.width,
+            height: self.height,
+            pixel_format: self.pixel_format,
+            surface_id: self.surface_id,
+            data: self.data.clone(),
+            interlace_mode: self.interlace_mode,
+            dmabuf,
+            dxgi_handle: self.dxgi_handle.clone(),
+            cv_pixel_buffer: self.cv_pixel_buffer.clone(),
+            is_concealed: self.is_concealed,
+        })
+    }
+}
+
 impl Default for DecodedFrame {
     fn default() -> Self {
         Self {

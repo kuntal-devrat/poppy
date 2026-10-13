@@ -144,6 +144,10 @@ impl VaapiH264Decoder {
 
 impl HwDecoder for VaapiH264Decoder {
     fn submit_packet(&mut self, packet: &Packet) -> Result<(), HwError> {
+        if packet.data.is_empty() {
+            return Ok(());
+        }
+
         // Handle both Annex-B (start codes) and AVCC length-prefixed NALs
         let nals = if packet.data.starts_with(&[0, 0, 0, 1]) || packet.data.starts_with(&[0, 0, 1])
         {

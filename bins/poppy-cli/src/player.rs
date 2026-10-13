@@ -155,13 +155,20 @@ impl VideoPlayerApp {
             }
         }
 
+        // Advance to the actual keyframe the decoder landed on so we know the true stream position
+        let actual_pos = if let Ok(true) = self.advance_frame() {
+            self.relative_position()
+        } else {
+            target
+        };
+
+        // Snap both the audio sink clock and master playback anchor to the landed keyframe timestamp
         if let Some(sink) = &self.audio_sink {
-            sink.reset_to(target);
+            sink.reset_to(actual_pos);
         }
 
-        self.paused_at_position = target;
+        self.paused_at_position = actual_pos;
         self.playback_start = Some(Instant::now());
-        let _ = self.advance_frame();
         self.pump_audio();
 
         if let Some(w) = &self.window {
@@ -473,12 +480,16 @@ impl ApplicationHandler for VideoPlayerApp {
                     if let Some(stream) = &mut self.stream {
                         let _ = stream.seek_seconds(0.0);
                     }
+                    let actual_pos = if let Ok(true) = self.advance_frame() {
+                        self.relative_position()
+                    } else {
+                        0.0
+                    };
                     if let Some(sink) = &self.audio_sink {
-                        sink.reset_to(0.0);
+                        sink.reset_to(actual_pos);
                     }
-                    self.paused_at_position = 0.0;
+                    self.paused_at_position = actual_pos;
                     self.playback_start = Some(Instant::now());
-                    let _ = self.advance_frame();
                     self.pump_audio();
                     if let Some(w) = &self.window {
                         w.request_redraw();

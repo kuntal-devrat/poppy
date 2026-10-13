@@ -75,6 +75,8 @@ pub struct MatroskaTrack {
     pub default_duration_ticks: Option<u64>,
     /// Codec delay (gapless trim) in ticks.
     pub codec_delay_ticks: Option<u64>,
+    /// Seek preroll duration in ticks.
+    pub seek_preroll_ticks: Option<u64>,
 }
 
 /// A parsed media sample from a Matroska Cluster.
@@ -475,7 +477,8 @@ impl MatroskaDemuxer {
                             let mut audio_sample_rate: Option<u32> = None;
                             let mut audio_bit_depth: Option<u16> = None;
                             let mut default_duration: Option<u64> = None;
-                            let mut codec_delay: Option<u64> = None;
+                            let mut codec_delay_ns: Option<u64> = None;
+                            let mut seek_preroll_ns: Option<u64> = None;
 
                             for entry_res in EbmlIter::new(track_elem.payload, track_elem.offset) {
                                 let entry_elem = entry_res?;
@@ -504,7 +507,11 @@ impl MatroskaDemuxer {
                                             super::element::try_read_uint(entry_elem.payload).ok();
                                     }
                                     ID_CODEC_DELAY => {
-                                        codec_delay =
+                                        codec_delay_ns =
+                                            super::element::try_read_uint(entry_elem.payload).ok();
+                                    }
+                                    ID_SEEK_PREROLL => {
+                                        seek_preroll_ns =
                                             super::element::try_read_uint(entry_elem.payload).ok();
                                     }
                                     ID_VIDEO_SETTINGS => {
@@ -626,6 +633,10 @@ impl MatroskaDemuxer {
                                 // lying about 8-bit BT.709.
                             }
 
+                            let codec_delay_ticks =
+                                codec_delay_ns.map(|ns| ns / timestamp_scale_ns);
+                            let seek_preroll_ticks =
+                                seek_preroll_ns.map(|ns| ns / timestamp_scale_ns);
                             let codec_id = CodecId::from_matroska_codec_id(&codec_str);
                             tracks.push(MatroskaTrack {
                                 track_num,
@@ -636,7 +647,8 @@ impl MatroskaDemuxer {
                                 width,
                                 height,
                                 default_duration_ticks: default_duration,
-                                codec_delay_ticks: codec_delay,
+                                codec_delay_ticks,
+                                seek_preroll_ticks,
                             });
                         }
                     }
@@ -870,6 +882,15 @@ impl MatroskaDemuxer {
             }
         }
 
+        // Apply track codec_delay (e.g. for gapless Opus) to sample timestamps
+        for s in &mut samples {
+            if let Some(tr) = tracks.iter().find(|t| t.track_num == s.track_num)
+                && let Some(delay) = tr.codec_delay_ticks
+            {
+                s.timestamp_ticks = (s.timestamp_ticks - delay as i64).max(0);
+            }
+        }
+
         // Segment duration (float ticks) -> duration_ticks in timebase units.
         let segment_duration_as_ticks = segment_duration_ticks;
 
@@ -882,6 +903,9 @@ impl MatroskaDemuxer {
                 time_base,
                 duration_ticks: segment_duration_as_ticks.map(|v| v as i64),
                 config: t.codec_config.clone(),
+                width: t.width,
+                height: t.height,
+                enabled: true,
             })
             .collect();
 
@@ -956,14 +980,21 @@ impl Demuxer for MatroskaDemuxer {
             },
         )?;
 
-        // Prefer cues if available: find the greatest cue time <= timestamp for this track.
+        let preroll = self
+            .tracks
+            .get(stream_index)
+            .and_then(|t| t.seek_preroll_ticks)
+            .unwrap_or(0) as i64;
+        let effective_ts = timestamp.saturating_sub(preroll);
+
+        // Prefer cues if available: find the greatest cue time <= effective_ts for this track.
         let mut cue_hint: Option<i64> = None;
         for c in &self.cues {
-            if c.track_num == track_num && (c.time_ticks as i64) <= timestamp {
+            if c.track_num == track_num && (c.time_ticks as i64) <= effective_ts {
                 cue_hint = Some(c.time_ticks as i64);
             }
         }
-        let search_ts = cue_hint.unwrap_or(timestamp);
+        let search_ts = cue_hint.unwrap_or(effective_ts);
 
         // Samples are in file (cluster) order, not globally sorted when
         // tracks interleave. Scan all for the keyframe with greatest PTS <= ts.
@@ -988,7 +1019,7 @@ impl Demuxer for MatroskaDemuxer {
                 if s.track_num != track_num || !s.is_keyframe {
                     continue;
                 }
-                if s.timestamp_ticks <= timestamp && s.timestamp_ticks >= best_ts {
+                if s.timestamp_ticks <= effective_ts && s.timestamp_ticks >= best_ts {
                     best_ts = s.timestamp_ticks;
                     best_idx = Some(i);
                 }

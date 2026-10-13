@@ -617,6 +617,10 @@ impl VaapiAv1Decoder {
 
 impl HwDecoder for VaapiAv1Decoder {
     fn submit_packet(&mut self, packet: &Packet) -> Result<(), HwError> {
+        if packet.data.is_empty() {
+            return Ok(());
+        }
+
         let obus = match split_obus(&packet.data) {
             Ok(o) => o,
             Err(_) => return Ok(()),

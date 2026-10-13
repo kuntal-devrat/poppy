@@ -995,7 +995,7 @@ pub unsafe extern "C" fn poppy_read_audio_frame(
         match guard.next_audio_frame() {
             Ok(Some(frame)) => {
                 let pts_seconds = match (frame.pts, audio_tb) {
-                    (Some(ticks), Some(tb)) => tb.to_seconds(ticks),
+                    (Some(ticks), Some(tb)) => tb.to_seconds(ticks).max(0.0),
                     _ => 0.0,
                 };
                 let boxed = Box::new(PoppyAudioFrame {

@@ -47,6 +47,9 @@ pub struct SequenceParameterSet {
     pub pcm_enabled_flag: bool,
     pub short_term_ref_pic_sets: Vec<ShortTermRefPicSet>,
     pub long_term_ref_pics_present_flag: bool,
+    pub num_long_term_ref_pics_sps: u32,
+    pub lt_ref_pic_poc_lsb_sps: Vec<u32>,
+    pub used_by_curr_pic_lt_sps_flag: Vec<bool>,
     pub sps_temporal_mvp_enabled_flag: bool,
     pub strong_intra_smoothing_enabled_flag: bool,
     pub vui_parameters_present_flag: bool,
@@ -173,6 +176,9 @@ impl SequenceParameterSet {
         }
 
         let long_term_ref_pics_present_flag = reader.read_bit()?;
+        let mut num_long_term_ref_pics_sps = 0u32;
+        let mut lt_ref_pic_poc_lsb_sps = Vec::new();
+        let mut used_by_curr_pic_lt_sps_flag = Vec::new();
         if long_term_ref_pics_present_flag {
             let num_lt_rps = reader.read_ue()?;
             if num_lt_rps > 32 {
@@ -180,10 +186,11 @@ impl SequenceParameterSet {
                     "num_lt_rps {num_lt_rps} exceeds max 32"
                 )));
             }
+            num_long_term_ref_pics_sps = num_lt_rps;
             let poc_bits = (log2_max_pic_order_cnt_lsb_minus4 + 4) as usize;
             for _ in 0..num_lt_rps {
-                reader.skip_bits(poc_bits)?;
-                reader.skip_bits(1)?; // used_by_curr_pic_lt_sps_flag
+                lt_ref_pic_poc_lsb_sps.push(reader.read_bits(poc_bits)?);
+                used_by_curr_pic_lt_sps_flag.push(reader.read_bit()?);
             }
         }
 
@@ -222,6 +229,9 @@ impl SequenceParameterSet {
             pcm_enabled_flag,
             short_term_ref_pic_sets,
             long_term_ref_pics_present_flag,
+            num_long_term_ref_pics_sps,
+            lt_ref_pic_poc_lsb_sps,
+            used_by_curr_pic_lt_sps_flag,
             sps_temporal_mvp_enabled_flag,
             strong_intra_smoothing_enabled_flag,
             vui_parameters_present_flag,

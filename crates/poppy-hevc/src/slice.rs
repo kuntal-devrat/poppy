@@ -185,6 +185,41 @@ impl SliceSegmentHeader {
                     }
                 }
 
+                if sps.long_term_ref_pics_present_flag {
+                    let mut num_long_term_sps = 0u32;
+                    if sps.num_long_term_ref_pics_sps > 0 {
+                        num_long_term_sps = reader.read_ue()?;
+                    }
+                    let num_long_term_pics = reader.read_ue()?;
+                    let total_lt = num_long_term_sps.saturating_add(num_long_term_pics);
+                    if total_lt > 32 {
+                        return Err(BitstreamError::InvalidSyntax(format!(
+                            "total long-term pics {total_lt} exceeds 32"
+                        )));
+                    }
+                    for i in 0..total_lt {
+                        if i < num_long_term_sps {
+                            if sps.num_long_term_ref_pics_sps > 1 {
+                                let mut lt_idx_bits = 0;
+                                while (1 << lt_idx_bits) < sps.num_long_term_ref_pics_sps {
+                                    lt_idx_bits += 1;
+                                }
+                                if lt_idx_bits > 0 {
+                                    reader.skip_bits(lt_idx_bits)?;
+                                }
+                            }
+                        } else {
+                            let poc_bits = (sps.log2_max_pic_order_cnt_lsb_minus4 + 4) as usize;
+                            reader.skip_bits(poc_bits)?; // poc_lsb_lt
+                            reader.skip_bits(1)?; // used_by_curr_pic_lt_flag
+                        }
+                        let delta_poc_msb_present_flag = reader.read_bit()?;
+                        if delta_poc_msb_present_flag {
+                            let _delta_poc_msb_cycle_lt = reader.read_ue()?;
+                        }
+                    }
+                }
+
                 if sps.sps_temporal_mvp_enabled_flag {
                     slice_temporal_mvp_enabled_flag = reader.read_bit()?;
                 }

@@ -468,6 +468,10 @@ impl D3D12VideoDecoder {
 
 impl HwDecoder for D3D12VideoDecoder {
     fn submit_packet(&mut self, packet: &Packet) -> Result<(), HwError> {
+        if packet.data.is_empty() {
+            return Ok(());
+        }
+
         match self.codec {
             CodecId::H264 => self.decode_h264_packet(packet),
             CodecId::Hevc => self.decode_hevc_packet(packet),

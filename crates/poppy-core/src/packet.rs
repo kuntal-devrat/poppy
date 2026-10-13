@@ -202,6 +202,15 @@ pub struct StreamInfo {
 
     /// Codec-specific configuration extracted from the container.
     pub config: CodecConfig,
+
+    /// Coded or display width (0 for audio or if unknown).
+    pub width: u32,
+
+    /// Coded or display height (0 for audio or if unknown).
+    pub height: u32,
+
+    /// Whether this track is marked as enabled in container metadata.
+    pub enabled: bool,
 }
 
 impl StreamInfo {

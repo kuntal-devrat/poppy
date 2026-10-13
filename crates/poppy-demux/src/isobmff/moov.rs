@@ -76,6 +76,10 @@ pub struct ParsedTrack {
     pub trex: Option<TrexDefaults>,
     /// Edit list (media-time, duration) if present. Applied to timestamps.
     pub edit_list: Vec<(i64, i64)>,
+    /// Track header flags (from tkhd).
+    pub flags: u32,
+    /// Whether this track is marked as enabled (tkhd flag 0x0001).
+    pub enabled: bool,
 }
 
 impl ParsedTrack {
@@ -87,6 +91,9 @@ impl ParsedTrack {
             time_base: self.time_base,
             duration_ticks: self.duration_ticks,
             config: self.codec_config.clone(),
+            width: self.width,
+            height: self.height,
+            enabled: self.enabled,
         }
     }
 }
@@ -441,6 +448,7 @@ fn parse_trak(data: &[u8], file_offset: u64) -> Result<Option<ParsedTrack>, Demu
     let mut tkhd_width = 0u32;
     let mut tkhd_height = 0u32;
     let mut tkhd_duration = 0u64;
+    let mut tkhd_flags = 0x0001u32;
 
     let mut mdhd_timescale = 0u32;
     let mut mdhd_duration = 0u64;
@@ -460,6 +468,7 @@ fn parse_trak(data: &[u8], file_offset: u64) -> Result<Option<ParsedTrack>, Demu
             b"tkhd" => {
                 if body.len() >= 4 {
                     let version = body[0];
+                    tkhd_flags = u32::from_be_bytes([0, body[1], body[2], body[3]]);
                     if version == 0 && body.len() >= 84 {
                         track_id = u32::from_be_bytes([body[12], body[13], body[14], body[15]]);
                         let dur = u32::from_be_bytes([body[20], body[21], body[22], body[23]]);
@@ -654,6 +663,7 @@ fn parse_trak(data: &[u8], file_offset: u64) -> Result<Option<ParsedTrack>, Demu
     } else {
         tkhd_height
     };
+    let enabled = (tkhd_flags & 0x0001) != 0;
 
     Ok(Some(ParsedTrack {
         track_id,
@@ -667,6 +677,8 @@ fn parse_trak(data: &[u8], file_offset: u64) -> Result<Option<ParsedTrack>, Demu
         sample_table,
         trex: None,
         edit_list,
+        flags: tkhd_flags,
+        enabled,
     }))
 }
 
