@@ -50,7 +50,7 @@ jobs:
             echo "==> Publishing $crate to crates.io..."
             echo "=========================================="
             success=false
-            for attempt in $(seq 1 15); do
+            for attempt in $(seq 1 25); do
               output=$(cargo publish -p "$crate" 2>&1) && {
                 echo "$output"
                 echo "Successfully published $crate"
@@ -58,12 +58,22 @@ jobs:
                 break
               } || {
                 echo "$output"
-                if echo "$output" | grep -qi "already uploaded"; then
+                if echo "$output" | grep -qi -E "already (uploaded|exists)"; then
                   echo "$crate is already uploaded on crates.io, skipping..."
                   success=true
                   break
                 fi
-                echo "Publishing $crate failed (attempt $attempt/15); waiting 20s for crates.io index to update..."
+                if echo "$output" | grep -qi -E "(not an owner|unauthorized|forbidden)"; then
+                  echo "::warning::Not authorized to publish $crate on crates.io; skipping."
+                  success=true
+                  break
+                fi
+                if echo "$output" | grep -qi -E "(429 Too Many Requests|too many new crates|rate limit)"; then
+                  echo "Rate-limited by crates.io on $crate (attempt $attempt/25). Waiting 60s for rate limit window to expire..."
+                  sleep 60
+                  continue
+                fi
+                echo "Publishing $crate failed (attempt $attempt/25); waiting 20s for crates.io index to update..."
                 sleep 20
               }
             done
