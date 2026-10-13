@@ -27,6 +27,9 @@ pub type CFStringRef = *const c_void;
 pub type CFAllocatorRef = *const c_void;
 pub type CFNumberRef = *const c_void;
 pub type CFBooleanRef = *const c_void;
+pub type CFIndex = isize;
+pub type CMItemCount = CFIndex;
+pub type CFNumberType = CFIndex;
 
 pub type VTDecompressionSessionRef = *mut c_void;
 pub type CMFormatDescriptionRef = *mut c_void;
@@ -82,7 +85,7 @@ pub struct VTDecompressionOutputCallbackRecord {
 }
 
 // CFNumber types
-pub const K_CF_NUMBER_SI_NT32_TYPE: i32 = 3;
+pub const K_CF_NUMBER_SI_NT32_TYPE: CFNumberType = 3;
 
 /// Dynamically loaded VideoToolbox function table.
 ///
@@ -108,7 +111,7 @@ pub struct VtFunctions {
     ),
     pub cf_number_create: unsafe extern "C" fn(
         allocator: CFAllocatorRef,
-        the_type: i32,
+        the_type: CFNumberType,
         value_ptr: *const c_void,
     ) -> CFNumberRef,
     pub cf_release: unsafe extern "C" fn(cf: CFTypeRef),
@@ -161,10 +164,10 @@ pub struct VtFunctions {
         make_data_ready_callback: *const c_void,
         make_data_ready_refcon: *const c_void,
         format_description: CMVideoFormatDescriptionRef,
-        num_samples: i32,
-        num_sample_timing_entries: i32,
+        num_samples: CMItemCount,
+        num_sample_timing_entries: CMItemCount,
         sample_timing_array: *const CMSampleTimingInfo,
-        num_sample_size_entries: i32,
+        num_sample_size_entries: CMItemCount,
         sample_size_array: *const usize,
         sample_buffer_out: *mut CMSampleBufferRef,
     ) -> OSStatus,

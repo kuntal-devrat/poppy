@@ -439,7 +439,7 @@ impl VideoToolboxDecoder {
         };
 
         let mut sample_buffer: CMSampleBufferRef = ptr::null_mut();
-        let status = unsafe {
+        let mut status = unsafe {
             (self.funcs.cm_sample_buffer_create)(
                 ptr::null(), // kCFAllocatorDefault
                 block_buffer,
@@ -447,14 +447,34 @@ impl VideoToolboxDecoder {
                 ptr::null(), // makeDataReadyCallback
                 ptr::null(), // makeDataReadyRefcon
                 self.format_desc,
-                1, // numSamples
-                1, // numSampleTimingEntries
+                1, // numSamples (CMItemCount)
+                1, // numSampleTimingEntries (CMItemCount)
                 &timing_info,
-                1, // numSampleSizeEntries
+                1, // numSampleSizeEntries (CMItemCount)
                 &sample_size,
                 &mut sample_buffer,
             )
         };
+
+        if (status != NO_ERR || sample_buffer.is_null()) && !block_buffer.is_null() {
+            // Fallback: single sample inferred from block buffer length (0 entries, NULL size array)
+            status = unsafe {
+                (self.funcs.cm_sample_buffer_create)(
+                    ptr::null(),
+                    block_buffer,
+                    1,
+                    ptr::null(),
+                    ptr::null(),
+                    self.format_desc,
+                    1,
+                    1,
+                    &timing_info,
+                    0,
+                    ptr::null(),
+                    &mut sample_buffer,
+                )
+            };
+        }
 
         // Release block buffer (sample buffer retains it)
         unsafe {
