@@ -1,0 +1,76 @@
+name: Publish Crates
+
+on:
+  release:
+    types: [published]
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    name: Publish to Crates.io
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install system dependencies (Linux)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libva-dev libdrm-dev libasound2-dev pkg-config
+
+      - name: Publish crates to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        run: |
+          crates=(
+            "poppy-core"
+            "poppy-h264"
+            "poppy-hevc"
+            "poppy-av1"
+            "poppy-vp9"
+            "poppy-demux"
+            "poppy-audio"
+            "poppy-hw"
+            "poppy-render"
+            "poppy"
+            "poppy-cli"
+          )
+
+          for crate in "${crates[@]}"; do
+            echo "=========================================="
+            echo "==> Publishing $crate to crates.io..."
+            echo "=========================================="
+            success=false
+            for attempt in $(seq 1 15); do
+              output=$(cargo publish -p "$crate" 2>&1) && {
+                echo "$output"
+                echo "Successfully published $crate"
+                success=true
+                break
+              } || {
+                echo "$output"
+                if echo "$output" | grep -qi "already uploaded"; then
+                  echo "$crate is already uploaded on crates.io, skipping..."
+                  success=true
+                  break
+                fi
+                echo "Publishing $crate failed (attempt $attempt/15); waiting 20s for crates.io index to update..."
+                sleep 20
+              }
+            done
+            if [ "$success" = false ]; then
+              echo "Failed to publish $crate after retries"
+              exit 1
+            fi
+            # Wait between crate publications to allow the crates.io index to sync
+            sleep 15
+          done
