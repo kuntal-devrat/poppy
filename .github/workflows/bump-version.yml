@@ -1,0 +1,110 @@
+name: Version Bump & Release Bot
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump_type:
+        description: 'Version increment level'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+          - custom
+      custom_version:
+        description: 'Custom semver version (e.g. 0.6.1; used if bump_type is custom)'
+        required: false
+        default: ''
+        type: string
+      dry_run:
+        description: 'Dry run (validate without pushing commit/tag or creating release)'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: release-bot-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+  pull-requests: write
+  actions: write
+
+jobs:
+  bump-version-and-release:
+    name: Bump Version & Trigger Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install system dependencies (Linux)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libva-dev libdrm-dev libasound2-dev pkg-config
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Execute version bump script
+        id: bump
+        run: |
+          python3 scripts/bump-version.py "${{ inputs.bump_type }}" "${{ inputs.custom_version }}"
+
+      - name: Verify compilation and tests
+        run: |
+          cargo check --workspace
+          cargo test --workspace -- --test-threads=1
+
+      - name: Commit, Tag, and Release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NEW_VERSION="${{ steps.bump.outputs.new_version }}"
+          TAG="v${NEW_VERSION}"
+
+          echo "Configuring git credentials..."
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          echo "Committing Cargo.toml changes..."
+          git add Cargo.toml
+          git add Cargo.lock 2>/dev/null || true
+          if git diff --staged --quiet; then
+            echo "No changes detected to Cargo.toml."
+          else
+            git commit -m "chore(release): bump crate versions to ${TAG} [skip ci]"
+            git push origin master
+          fi
+
+          echo "Checking tag ${TAG}..."
+          if git rev-parse "${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists."
+          else
+            echo "Creating and pushing tag ${TAG}..."
+            git tag -a "${TAG}" -m "Release ${TAG}"
+            git push origin "${TAG}"
+          fi
+
+          echo "Creating GitHub Release ${TAG}..."
+          gh release view "${TAG}" >/dev/null 2>&1 || {
+            gh release create "${TAG}" \
+              --title "${TAG}" \
+              --generate-notes \
+              --latest
+          }
+
+          echo "Successfully triggered release ${TAG}! Publish workflow will run automatically."

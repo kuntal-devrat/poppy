@@ -15,7 +15,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.6.0"
+version = "0.6.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/kuntal-devrat/poppy"
@@ -23,17 +23,17 @@ description = "Crisp, memory-safe video demuxing with zero-copy hardware decode"
 
 [workspace.dependencies]
 # Internal crates
-poppy-core = { version = "0.6.0", path = "crates/poppy-core" }
-poppy-demux = { version = "0.6.0", path = "crates/poppy-demux" }
-poppy-h264 = { version = "0.6.0", path = "crates/poppy-h264" }
-poppy-hevc = { version = "0.6.0", path = "crates/poppy-hevc" }
-poppy-av1 = { version = "0.6.0", path = "crates/poppy-av1" }
-poppy-vp9 = { version = "0.6.0", path = "crates/poppy-vp9" }
-poppy-audio = { version = "0.6.0", path = "crates/poppy-audio" }
-poppy-hw = { version = "0.6.0", path = "crates/poppy-hw" }
-poppy-render = { version = "0.6.0", path = "crates/poppy-render" }
-poppy = { version = "0.6.0", path = "crates/poppy", package = "poppy-media" }
-poppy-media = { version = "0.6.0", path = "crates/poppy" }
+poppy-core = { version = "0.6.1", path = "crates/poppy-core" }
+poppy-demux = { version = "0.6.1", path = "crates/poppy-demux" }
+poppy-h264 = { version = "0.6.1", path = "crates/poppy-h264" }
+poppy-hevc = { version = "0.6.1", path = "crates/poppy-hevc" }
+poppy-av1 = { version = "0.6.1", path = "crates/poppy-av1" }
+poppy-vp9 = { version = "0.6.1", path = "crates/poppy-vp9" }
+poppy-audio = { version = "0.6.1", path = "crates/poppy-audio" }
+poppy-hw = { version = "0.6.1", path = "crates/poppy-hw" }
+poppy-render = { version = "0.6.1", path = "crates/poppy-render" }
+poppy = { version = "0.6.1", path = "crates/poppy", package = "poppy-media" }
+poppy-media = { version = "0.6.1", path = "crates/poppy" }
 
 # Shared external dependencies
 bytes = "1"
