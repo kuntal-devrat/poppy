@@ -148,7 +148,7 @@ impl AudioDecoder for SymphoniaAudioDecoder {
                 let num_samples_per_channel = samples.len().checked_div(num_channels).unwrap_or(0);
 
                 let frame = AudioFrame {
-                    pts: packet.pts,
+                    pts: packet.pts.or(Some(packet.dts)),
                     sample_rate: spec.rate,
                     channels: num_channels as u16,
                     channel_layout: ChannelLayout::from_channels(num_channels as u16),

@@ -744,6 +744,10 @@ impl HwDecoder for VaapiH264Decoder {
     fn reset(&mut self) -> Result<(), HwError> {
         self.dpb.clear();
         self.output_queue.clear();
+        self.prev_poc_msb = 0;
+        self.prev_poc_lsb = 0;
+        self.prev_frame_num = 0;
+        self.prev_frame_num_offset = 0;
         Ok(())
     }
 }

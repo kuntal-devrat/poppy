@@ -113,3 +113,136 @@ fn test_seek_exact_on_single_keyframe_video() {
         );
     }
 }
+
+#[test]
+fn test_seek_on_uranium() {
+    let video_path = PathBuf::from(
+        "/home/pikasu/Downloads/𝗠𝗢𝗡𝗧𝗔𝗚𝗘𝗠 𝗨𝗥𝗔𝗡𝗜𝗨𝗠 (𝗦𝗨𝗣𝗘𝗥 𝗦𝗟𝗢𝗪𝗘𝗗) - weekkse (1080p, h264).mp4",
+    );
+    if !video_path.exists() {
+        return;
+    }
+
+    let mut stream = poppy::open(&video_path).expect("open failed");
+    let tb = stream.time_base();
+
+    // 1. Initial frames: monotonically increasing
+    let mut prev_sec = -1.0;
+    for _ in 0..5 {
+        let f = stream.next_frame().unwrap().unwrap();
+        let sec = tb.to_seconds(f.pts.unwrap());
+        assert!(
+            sec > prev_sec,
+            "Initial frames must have ascending PTS: {sec} > {prev_sec}"
+        );
+        prev_sec = sec;
+    }
+
+    // 2. Seeking forward to 11.0s (GOP is 6s)
+    let f11 = stream
+        .seek_exact(11.0)
+        .unwrap()
+        .expect("seek_exact(11.0) must produce frame");
+    let sec11 = tb.to_seconds(f11.pts.unwrap());
+    assert!(
+        (10.95..=11.1).contains(&sec11),
+        "Expected ~11.0s, got {sec11}s"
+    );
+
+    let mut prev_sec = sec11;
+    for _ in 0..5 {
+        let f = stream.next_frame().unwrap().unwrap();
+        let sec = tb.to_seconds(f.pts.unwrap());
+        assert!(
+            sec > prev_sec,
+            "Post-seek 11s frames must have strictly ascending PTS: {sec} > {prev_sec}"
+        );
+        assert!(!f.is_concealed, "Frame must not be concealed/corrupted");
+        prev_sec = sec;
+    }
+
+    // 3. Seeking backward to 8.2s (in middle of 6s-12s GOP)
+    let f82 = stream
+        .seek_exact(8.2)
+        .unwrap()
+        .expect("seek_exact(8.2) must produce frame");
+    let sec82 = tb.to_seconds(f82.pts.unwrap());
+    assert!(
+        (8.18..=8.25).contains(&sec82),
+        "Expected ~8.2s, got {sec82}s"
+    );
+
+    let mut prev_sec = sec82;
+    for _ in 0..10 {
+        let f = stream.next_frame().unwrap().unwrap();
+        let sec = tb.to_seconds(f.pts.unwrap());
+        assert!(
+            sec > prev_sec,
+            "Post-seek 8.2s frames must have strictly ascending PTS (no jump back to 11s): {sec} > {prev_sec}"
+        );
+        assert!(
+            sec < 9.0,
+            "Frames must be around 8.2s-8.6s, not jumped to 11s+: {sec}"
+        );
+        assert!(!f.is_concealed, "Frame must not be concealed/corrupted");
+        prev_sec = sec;
+    }
+
+    // 4. Verify audio synchronization
+    if let (Some(af), Some(audio_tb)) =
+        (stream.next_audio_frame().unwrap(), stream.audio_time_base())
+    {
+        let af_sec = af.pts.map(|p| audio_tb.to_seconds(p)).unwrap_or(0.0);
+        println!("Audio frame PTS right after 8.2s seek: {af_sec:.3}s");
+        assert!(
+            (8.1..=8.8).contains(&af_sec),
+            "Audio must be near seek target, got {af_sec}s"
+        );
+    }
+
+    // 5. Seeking forward to 25.0s (crosses multiple GOP boundaries)
+    let f25 = stream
+        .seek_exact(25.0)
+        .unwrap()
+        .expect("seek_exact(25.0) must produce frame");
+    let sec25 = tb.to_seconds(f25.pts.unwrap());
+    assert!(
+        (24.95..=25.1).contains(&sec25),
+        "Expected ~25.0s, got {sec25}s"
+    );
+
+    let mut prev_sec = sec25;
+    for _ in 0..5 {
+        let f = stream.next_frame().unwrap().unwrap();
+        let sec = tb.to_seconds(f.pts.unwrap());
+        assert!(
+            sec > prev_sec,
+            "Post-seek 25s frames must have strictly ascending PTS: {sec} > {prev_sec}"
+        );
+        assert!(!f.is_concealed);
+        prev_sec = sec;
+    }
+
+    // 6. Seeking backward to 1.5s
+    let f15 = stream
+        .seek_exact(1.5)
+        .unwrap()
+        .expect("seek_exact(1.5) must produce frame");
+    let sec15 = tb.to_seconds(f15.pts.unwrap());
+    assert!(
+        (1.45..=1.55).contains(&sec15),
+        "Expected ~1.5s, got {sec15}s"
+    );
+
+    let mut prev_sec = sec15;
+    for _ in 0..5 {
+        let f = stream.next_frame().unwrap().unwrap();
+        let sec = tb.to_seconds(f.pts.unwrap());
+        assert!(
+            sec > prev_sec,
+            "Post-seek 1.5s frames must have strictly ascending PTS: {sec} > {prev_sec}"
+        );
+        assert!(!f.is_concealed);
+        prev_sec = sec;
+    }
+}
