@@ -8,17 +8,6 @@ use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::error::AudioError;
 
-/// Maximum wall-clock extrapolation applied by [`AudioClock::current_pts_seconds`].
-///
-/// The clock is driven by exact sample counts consumed by the audio hardware.
-/// Between callbacks the reader extrapolates with the monotonic wall clock, but
-/// only up to this bound: on sustained underflow (stalls longer than this) the
-/// reported PTS freezes instead of running away from the audible position.
-/// 0.5 s keeps video in sync across brief scheduling hiccups/GC pauses that
-/// would previously freeze video after only 100 ms, while still clamping
-/// runaway divergence on real stalls.
-const MAX_EXTRAPOLATION_SECONDS: f64 = 0.5;
-
 /// Maximum buffered audio in samples: ~4 s of 48 kHz stereo.
 const MAX_BUFFER_SAMPLES: usize = 48_000 * 2 * 4;
 
@@ -32,6 +21,7 @@ const MAX_BUFFER_SAMPLES: usize = 48_000 * 2 * 4;
 struct ClockInner {
     base_micros: u64,
     last_instant: Option<Instant>,
+    max_reported_micros: u64,
 }
 
 /// High-resolution master audio clock tracking exact audible playback time.
@@ -58,6 +48,7 @@ impl AudioClock {
             inner: Arc::new(Mutex::new(ClockInner {
                 base_micros: 0,
                 last_instant: None,
+                max_reported_micros: 0,
             })),
             pending_micros: Arc::new(AtomicU64::new(0)),
             is_paused: Arc::new(AtomicBool::new(false)),
@@ -70,26 +61,30 @@ impl AudioClock {
         let pending = self.pending_micros.swap(0, Ordering::AcqRel);
         if pending > 0 {
             guard.base_micros = guard.base_micros.saturating_add(pending);
+            guard.max_reported_micros = guard.max_reported_micros.max(guard.base_micros);
         }
         guard
     }
 
     /// Current audible presentation timestamp in seconds with microsecond resolution.
     pub fn current_pts_seconds(&self) -> f64 {
-        let guard = self.lock_folded();
-        let base_sec = guard.base_micros as f64 / 1_000_000.0;
+        let mut guard = self.lock_folded();
         if self.is_paused.load(Ordering::Relaxed) {
-            return base_sec;
+            return (guard.base_micros as f64) / 1_000_000.0;
         }
 
-        let elapsed = guard
+        let elapsed_micros = guard
             .last_instant
-            .map(|t| t.elapsed().as_secs_f64())
-            .unwrap_or(0.0);
+            .map(|t| (t.elapsed().as_secs_f64() * 1_000_000.0) as u64)
+            .unwrap_or(0);
 
-        // Bound extrapolation (see MAX_EXTRAPOLATION_SECONDS) in case audio
-        // playback underflows.
-        base_sec + elapsed.min(MAX_EXTRAPOLATION_SECONDS)
+        // Bound extrapolation to 100ms to avoid clock runaway during stalls/underruns
+        const MAX_EXTRAPOLATION_MICROS: u64 = 100_000;
+        let bounded_elapsed = elapsed_micros.min(MAX_EXTRAPOLATION_MICROS);
+
+        let computed = guard.base_micros.saturating_add(bounded_elapsed);
+        guard.max_reported_micros = guard.max_reported_micros.max(computed);
+        (guard.max_reported_micros as f64) / 1_000_000.0
     }
 
     /// Record audio hardware progress: update base PTS and refresh update instant.
@@ -105,10 +100,9 @@ impl AudioClock {
         match self.inner.try_lock() {
             Ok(mut guard) => {
                 let pending = self.pending_micros.swap(0, Ordering::AcqRel);
-                guard.base_micros = guard
-                    .base_micros
-                    .saturating_add(pending)
-                    .saturating_add(delta_micros);
+                let advance = pending.saturating_add(delta_micros);
+                guard.base_micros = guard.base_micros.saturating_add(advance);
+                guard.max_reported_micros = guard.max_reported_micros.max(guard.base_micros);
                 guard.last_instant = Some(Instant::now());
             }
             Err(_) => {
@@ -126,6 +120,7 @@ impl AudioClock {
         self.pending_micros.store(0, Ordering::Release);
         let mut guard = self.inner.lock().unwrap();
         guard.base_micros = micros;
+        guard.max_reported_micros = micros;
         guard.last_instant = if self.is_paused.load(Ordering::Relaxed) {
             None
         } else {
@@ -140,9 +135,11 @@ impl AudioClock {
     pub fn pause(&self) {
         let mut guard = self.lock_folded();
         if let Some(t) = guard.last_instant {
-            let delta_micros =
-                (t.elapsed().as_secs_f64().min(MAX_EXTRAPOLATION_SECONDS) * 1_000_000.0) as u64;
-            guard.base_micros = guard.base_micros.saturating_add(delta_micros);
+            let elapsed_micros = (t.elapsed().as_secs_f64() * 1_000_000.0) as u64;
+            const MAX_EXTRAPOLATION_MICROS: u64 = 100_000;
+            let bounded_elapsed = elapsed_micros.min(MAX_EXTRAPOLATION_MICROS);
+            guard.base_micros = guard.base_micros.saturating_add(bounded_elapsed);
+            guard.max_reported_micros = guard.max_reported_micros.max(guard.base_micros);
         }
         guard.last_instant = None;
         self.is_paused.store(true, Ordering::Release);

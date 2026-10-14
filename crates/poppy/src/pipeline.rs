@@ -646,8 +646,8 @@ impl MediaStream {
         let tb = self.time_base();
 
         let mut best_frame: Option<DecodedFrame> = None;
-        const MAX_PREROLL_FRAMES: usize = 600;
-        const MAX_PREROLL_DURATION: std::time::Duration = std::time::Duration::from_millis(1500);
+        const MAX_PREROLL_FRAMES: usize = 1200;
+        const MAX_PREROLL_DURATION: std::time::Duration = std::time::Duration::from_millis(5000);
         let start_time = std::time::Instant::now();
         let mut decoded = 0;
 
@@ -671,7 +671,7 @@ impl MediaStream {
         // Synchronize audio track up to target_seconds
         if let Some(audio_tb) = self.audio_time_base() {
             let mut audio_decoded = 0;
-            const MAX_AUDIO_PREROLL: usize = 600;
+            const MAX_AUDIO_PREROLL: usize = 1200;
             while audio_decoded < MAX_AUDIO_PREROLL {
                 match self.next_audio_frame()? {
                     Some(af) => {

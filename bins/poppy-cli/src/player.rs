@@ -39,6 +39,9 @@ pub struct VideoPlayerApp {
     // In-process pure-Rust audio playback sink
     audio_sink: Option<AudioSink>,
     has_audio_stream: bool,
+
+    // Seek display synchronization
+    seek_frame_pending_display: bool,
 }
 
 impl VideoPlayerApp {
@@ -63,6 +66,7 @@ impl VideoPlayerApp {
             last_status_print: Instant::now(),
             audio_sink: None,
             has_audio_stream: false,
+            seek_frame_pending_display: false,
         }
     }
 
@@ -110,7 +114,7 @@ impl VideoPlayerApp {
             let target_samples =
                 (sink.device_sample_rate() as usize) * (sink.device_channels() as usize);
             let mut frames_pumped = 0;
-            while sink.queued_samples() < target_samples && frames_pumped < 8 {
+            while sink.queued_samples() < target_samples && frames_pumped < 32 {
                 match stream.next_audio_frame() {
                     Ok(Some(af)) => {
                         sink.push_frame(&af);
@@ -134,7 +138,9 @@ impl VideoPlayerApp {
         if let Some(sink) = &self.audio_sink {
             sink.play();
         }
-        self.pump_audio();
+        for _ in 0..4 {
+            self.pump_audio();
+        }
     }
 
     /// Seek forward or backward by `delta_seconds`.
@@ -173,8 +179,12 @@ impl VideoPlayerApp {
 
         self.paused_at_position = actual_pos;
         self.playback_start = Some(Instant::now());
-        self.pump_audio();
+        // Fully pre-buffer up to 1 second of audio at seek target before resuming display
+        for _ in 0..4 {
+            self.pump_audio();
+        }
 
+        self.seek_frame_pending_display = true;
         if let Some(w) = &self.window {
             w.request_redraw();
         }
@@ -243,6 +253,14 @@ impl VideoPlayerApp {
     fn schedule_next_wake(&self, event_loop: &ActiveEventLoop) {
         if self.is_paused {
             event_loop.set_control_flow(ControlFlow::Wait);
+            return;
+        }
+
+        if self.seek_frame_pending_display {
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+            event_loop.set_control_flow(ControlFlow::Poll);
             return;
         }
 
@@ -361,8 +379,15 @@ impl ApplicationHandler for VideoPlayerApp {
             eprintln!("⚠️ Failed to match surface output format: {e}");
         }
 
-        // Strict VSync mode eliminates screen tearing
-        let present_mode = if caps.present_modes.contains(&wgpu::PresentMode::Fifo) {
+        // Select platform-optimal vsync present mode to eliminate screen tearing while avoiding
+        // Wayland compositor presentation deadlocks / VK_TIMEOUT stalls on GNOME
+        let present_mode = if caps.present_modes.contains(&wgpu::PresentMode::AutoVsync) {
+            wgpu::PresentMode::AutoVsync
+        } else if caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
+            wgpu::PresentMode::Mailbox
+        } else if caps.present_modes.contains(&wgpu::PresentMode::FifoRelaxed) {
+            wgpu::PresentMode::FifoRelaxed
+        } else if caps.present_modes.contains(&wgpu::PresentMode::Fifo) {
             wgpu::PresentMode::Fifo
         } else {
             caps.present_modes[0]
@@ -497,15 +522,30 @@ impl ApplicationHandler for VideoPlayerApp {
 
                 self.pump_audio();
 
-                if !self.is_paused {
+                if self.seek_frame_pending_display {
+                    self.seek_frame_pending_display = false;
+                    // Render the landed seek frame without advancing forward.
+                    // Snap the master audio clock and wall anchor to this frame timestamp at presentation
+                    let landed_pos = self.relative_position();
+                    if let Some(sink) = &self.audio_sink {
+                        sink.clock().reset_to(landed_pos);
+                    }
+                    self.paused_at_position = landed_pos;
+                    self.playback_start = Some(Instant::now());
+                } else if !self.is_paused {
                     let target_pos = self.current_master_time();
 
                     // Advance frame if playback clock is ahead
-                    // Throttle catch-up to at most 2 frames per redraw to prevent catch-up stutter spirals
+                    // Allow catch-up up to 4 frames if noticeably behind, preventing stutter spirals
+                    let max_advance = if target_pos - self.relative_position() > 0.08 {
+                        4
+                    } else {
+                        2
+                    };
                     let mut frames_advanced = 0;
                     while !self.is_paused
                         && self.relative_position() < target_pos
-                        && frames_advanced < 2
+                        && frames_advanced < max_advance
                     {
                         match self.advance_frame() {
                             Ok(true) => {
@@ -547,7 +587,11 @@ impl ApplicationHandler for VideoPlayerApp {
 
                             output.present();
                         }
-                        Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                        Err(
+                            wgpu::SurfaceError::Lost
+                            | wgpu::SurfaceError::Outdated
+                            | wgpu::SurfaceError::Timeout,
+                        ) => {
                             if let (Some(config), Some(window)) =
                                 (&self.surface_config, &self.window)
                             {
@@ -560,7 +604,7 @@ impl ApplicationHandler for VideoPlayerApp {
                             event_loop.exit();
                             return;
                         }
-                        Err(wgpu::SurfaceError::Timeout | wgpu::SurfaceError::Other) => {}
+                        Err(wgpu::SurfaceError::Other) => {}
                     }
                 }
 
@@ -578,7 +622,16 @@ impl ApplicationHandler for VideoPlayerApp {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.seek_frame_pending_display {
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+            event_loop.set_control_flow(ControlFlow::Poll);
+            return;
+        }
+
         if !self.is_paused {
+            self.pump_audio();
             let target_pos = self.current_master_time();
             let cur_rel = self.relative_position();
             if cur_rel <= target_pos {
@@ -591,6 +644,8 @@ impl ApplicationHandler for VideoPlayerApp {
                 let wake_at = Instant::now() + Duration::from_secs_f64(wait_secs.clamp(0.001, 0.1));
                 event_loop.set_control_flow(ControlFlow::WaitUntil(wake_at));
             }
+        } else {
+            event_loop.set_control_flow(ControlFlow::Wait);
         }
     }
 }

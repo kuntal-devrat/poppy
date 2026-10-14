@@ -27,6 +27,7 @@ pub struct VaapiAv1Decoder {
     output_queue: VecDeque<DecodedFrame>,
     cur_surface_idx: usize,
     is_10bit: bool,
+    last_output_surface_id: Option<VASurfaceID>,
 }
 
 impl VaapiAv1Decoder {
@@ -43,6 +44,7 @@ impl VaapiAv1Decoder {
             output_queue: VecDeque::new(),
             cur_surface_idx: 0,
             is_10bit,
+            last_output_surface_id: None,
         })
     }
 
@@ -135,14 +137,46 @@ impl VaapiAv1Decoder {
             None => return Ok(()),
         };
 
-        // Select free surface not currently held in DPB
-        let target_surface = pool
-            .surfaces
-            .iter()
-            .copied()
-            .find(|&surf| !self.dpb_slots.contains(&surf))
-            .unwrap_or(pool.surfaces[self.cur_surface_idx]);
-        self.cur_surface_idx = (self.cur_surface_idx + 1) % pool.surfaces.len();
+        // Select a free surface using round-robin traversal across pool surfaces,
+        // strictly avoiding any surface held as a reference, pending output,
+        // or currently displayed on screen.
+        let pool_len = pool.surfaces.len();
+        let mut chosen = None;
+        for i in 0..pool_len {
+            let idx = (self.cur_surface_idx + i) % pool_len;
+            let s = pool.surfaces[idx];
+            let in_dpb = self.dpb_slots.contains(&s);
+            let in_output = self.output_queue.iter().any(|f| f.surface_id == s);
+            let is_displayed = self.last_output_surface_id == Some(s);
+            if !in_dpb && !in_output && !is_displayed {
+                chosen = Some((s, (idx + 1) % pool_len));
+                break;
+            }
+        }
+        let target_surface = match chosen {
+            Some((s, next_idx)) => {
+                self.cur_surface_idx = next_idx;
+                s
+            }
+            None => {
+                let s = pool
+                    .surfaces
+                    .iter()
+                    .copied()
+                    .find(|&surf| {
+                        !self.dpb_slots.contains(&surf) && self.last_output_surface_id != Some(surf)
+                    })
+                    .or_else(|| {
+                        pool.surfaces
+                            .iter()
+                            .copied()
+                            .find(|&surf| !self.dpb_slots.contains(&surf))
+                    })
+                    .unwrap_or(pool.surfaces[self.cur_surface_idx]);
+                self.cur_surface_idx = (self.cur_surface_idx + 1) % pool_len;
+                s
+            }
+        };
 
         let bit_depth_idx = if seq.high_bitdepth {
             if seq.twelve_bit { 2 } else { 1 }
@@ -716,7 +750,12 @@ impl HwDecoder for VaapiAv1Decoder {
     }
 
     fn receive_frame(&mut self) -> Result<Option<DecodedFrame>, HwError> {
-        Ok(self.output_queue.pop_front())
+        if let Some(frame) = self.output_queue.pop_front() {
+            self.last_output_surface_id = Some(frame.surface_id);
+            Ok(Some(frame))
+        } else {
+            Ok(None)
+        }
     }
 
     fn flush(&mut self) -> Result<(), HwError> {
@@ -727,6 +766,7 @@ impl HwDecoder for VaapiAv1Decoder {
         self.dpb_slots = [VA_INVALID_ID; 8];
         self.dpb_state = DpbState::default();
         self.output_queue.clear();
+        // Keep self.last_output_surface_id intact across reset to avoid overwriting displayed surface
         Ok(())
     }
 }

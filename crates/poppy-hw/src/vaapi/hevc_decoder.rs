@@ -32,6 +32,8 @@ pub struct VaapiHevcDecoder {
     is_10bit: bool,
     prev_poc_msb: i32,
     prev_poc_lsb: i32,
+    is_first_frame_after_reset: bool,
+    last_output_surface_id: Option<VASurfaceID>,
 }
 
 impl VaapiHevcDecoder {
@@ -52,6 +54,8 @@ impl VaapiHevcDecoder {
             is_10bit,
             prev_poc_msb: 0,
             prev_poc_lsb: 0,
+            is_first_frame_after_reset: true,
+            last_output_surface_id: None,
         })
     }
 
@@ -232,11 +236,7 @@ impl HwDecoder for VaapiHevcDecoder {
                     let w = sps.cropped_width();
                     let h = sps.cropped_height();
                     let dmabuf = pool.export_dmabuf_descriptor(rf.surface_id).ok();
-                    let data = if dmabuf.is_none() {
-                        pool.read_surface_data(rf.surface_id, w, h).ok()
-                    } else {
-                        None
-                    }; // lazy: skip CPU readback on zero-copy path
+                    let data = pool.read_surface_data(rf.surface_id, w, h).ok();
                     self.output_queue.push_back(DecodedFrame {
                         pts: rf.pts,
                         width: w,
@@ -283,12 +283,9 @@ impl HwDecoder for VaapiHevcDecoder {
                 {
                     let bumped = self.dpb.frames.remove(min_idx);
                     let dmabuf = pool.export_dmabuf_descriptor(bumped.surface_id).ok();
-                    let data = if dmabuf.is_none() {
-                        pool.read_surface_data(bumped.surface_id, bumped.width, bumped.height)
-                            .ok()
-                    } else {
-                        None
-                    }; // lazy zero-copy
+                    let data = pool
+                        .read_surface_data(bumped.surface_id, bumped.width, bumped.height)
+                        .ok();
                     self.output_queue.push_back(DecodedFrame {
                         pts: bumped.pts,
                         width: bumped.width,
@@ -311,21 +308,54 @@ impl HwDecoder for VaapiHevcDecoder {
                 }
             }
 
-            // Select a free surface that is not currently held in the DPB
-            let target_surface = pool
-                .surfaces
-                .iter()
-                .copied()
-                .find(|&surf| !self.dpb.frames.iter().any(|f| f.surface_id == surf))
-                .unwrap_or(pool.surfaces[self.cur_surface_idx]);
-            self.cur_surface_idx = (self.cur_surface_idx + 1) % pool.surfaces.len();
+            // Select a free surface using round-robin traversal across pool surfaces,
+            // strictly avoiding any surface held as a reference in the DPB, pending output,
+            // or currently displayed on screen.
+            let pool_len = pool.surfaces.len();
+            let mut chosen = None;
+            for i in 0..pool_len {
+                let idx = (self.cur_surface_idx + i) % pool_len;
+                let s = pool.surfaces[idx];
+                let in_dpb = self.dpb.frames.iter().any(|f| f.surface_id == s);
+                let in_output = self.output_queue.iter().any(|f| f.surface_id == s);
+                let is_displayed = self.last_output_surface_id == Some(s);
+                if !in_dpb && !in_output && !is_displayed {
+                    chosen = Some((s, (idx + 1) % pool_len));
+                    break;
+                }
+            }
+            let target_surface = match chosen {
+                Some((s, next_idx)) => {
+                    self.cur_surface_idx = next_idx;
+                    s
+                }
+                None => {
+                    let s =
+                        pool.surfaces
+                            .iter()
+                            .copied()
+                            .find(|&surf| {
+                                !self.dpb.frames.iter().any(|f| f.surface_id == surf)
+                                    && self.last_output_surface_id != Some(surf)
+                            })
+                            .or_else(|| {
+                                pool.surfaces.iter().copied().find(|&surf| {
+                                    !self.dpb.frames.iter().any(|f| f.surface_id == surf)
+                                })
+                            })
+                            .unwrap_or(pool.surfaces[self.cur_surface_idx]);
+                    self.cur_surface_idx = (self.cur_surface_idx + 1) % pool_len;
+                    s
+                }
+            };
 
             let max_poc_lsb = 1i32 << (sps.log2_max_pic_order_cnt_lsb_minus4 + 4);
             let poc_lsb = first_slice.slice_pic_order_cnt_lsb as i32;
-            let (poc_msb, cur_poc) = if first_nut.is_idr() {
+            let is_idr_or_first = first_nut.is_idr() || self.is_first_frame_after_reset;
+            let (poc_msb, cur_poc) = if is_idr_or_first {
                 self.prev_poc_msb = 0;
-                self.prev_poc_lsb = 0;
-                (0, 0)
+                self.prev_poc_lsb = poc_lsb;
+                (0, if first_nut.is_idr() { 0 } else { poc_lsb })
             } else {
                 let msb = if (poc_lsb < self.prev_poc_lsb)
                     && (self.prev_poc_lsb - poc_lsb >= max_poc_lsb / 2)
@@ -342,6 +372,7 @@ impl HwDecoder for VaapiHevcDecoder {
             };
             self.prev_poc_msb = poc_msb;
             self.prev_poc_lsb = poc_lsb;
+            self.is_first_frame_after_reset = false;
 
             // Build VAPictureParameterBufferHEVC
             let mut pic_param: VAPictureParameterBufferHEVC = unsafe { std::mem::zeroed() };
@@ -850,12 +881,9 @@ impl HwDecoder for VaapiHevcDecoder {
 
             for rf in released {
                 let dmabuf = pool.export_dmabuf_descriptor(rf.surface_id).ok();
-                let data = if dmabuf.is_none() {
-                    pool.read_surface_data(rf.surface_id, rf.width, rf.height)
-                        .ok()
-                } else {
-                    None
-                }; // lazy zero-copy
+                let data = pool
+                    .read_surface_data(rf.surface_id, rf.width, rf.height)
+                    .ok();
                 self.output_queue.push_back(DecodedFrame {
                     pts: rf.pts,
                     width: rf.width,
@@ -880,7 +908,12 @@ impl HwDecoder for VaapiHevcDecoder {
     }
 
     fn receive_frame(&mut self) -> Result<Option<DecodedFrame>, HwError> {
-        Ok(self.output_queue.pop_front())
+        if let Some(frame) = self.output_queue.pop_front() {
+            self.last_output_surface_id = Some(frame.surface_id);
+            Ok(Some(frame))
+        } else {
+            Ok(None)
+        }
     }
 
     fn flush(&mut self) -> Result<(), HwError> {
@@ -890,13 +923,10 @@ impl HwDecoder for VaapiHevcDecoder {
                 .pool
                 .as_ref()
                 .and_then(|p| p.export_dmabuf_descriptor(rf.surface_id).ok());
-            let data = if dmabuf.is_none() {
-                self.pool
-                    .as_ref()
-                    .and_then(|p| p.read_surface_data(rf.surface_id, rf.width, rf.height).ok())
-            } else {
-                None
-            }; // lazy zero-copy
+            let data = self
+                .pool
+                .as_ref()
+                .and_then(|p| p.read_surface_data(rf.surface_id, rf.width, rf.height).ok());
             self.output_queue.push_back(DecodedFrame {
                 pts: rf.pts,
                 width: rf.width,
@@ -921,6 +951,10 @@ impl HwDecoder for VaapiHevcDecoder {
     fn reset(&mut self) -> Result<(), HwError> {
         self.dpb.clear();
         self.output_queue.clear();
+        self.prev_poc_msb = 0;
+        self.prev_poc_lsb = 0;
+        self.is_first_frame_after_reset = true;
+        // Keep self.last_output_surface_id intact across reset to avoid overwriting displayed surface
         Ok(())
     }
 }

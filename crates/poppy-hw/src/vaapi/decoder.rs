@@ -29,6 +29,8 @@ pub struct VaapiH264Decoder {
     prev_poc_lsb: i32,
     prev_frame_num: u32,
     prev_frame_num_offset: i32,
+    is_first_frame_after_reset: bool,
+    last_output_surface_id: Option<VASurfaceID>,
 }
 
 impl VaapiH264Decoder {
@@ -49,6 +51,8 @@ impl VaapiH264Decoder {
             prev_poc_lsb: 0,
             prev_frame_num: 0,
             prev_frame_num_offset: 0,
+            is_first_frame_after_reset: true,
+            last_output_surface_id: None,
         })
     }
 
@@ -302,14 +306,23 @@ impl HwDecoder for VaapiH264Decoder {
             };
 
             let (_first_nal, first_header, first_slice) = &slices[0];
+            let is_idr_or_first =
+                first_header.unit_type.is_idr() || self.is_first_frame_after_reset;
             let cur_poc = match sps.pic_order_cnt_type {
                 0 => {
                     let max_poc_lsb = 1i32 << (sps.log2_max_pic_order_cnt_lsb_minus4 + 4);
                     let poc_lsb = first_slice.pic_order_cnt_lsb.unwrap_or(0) as i32;
-                    let (poc_msb, poc) = if first_header.unit_type.is_idr() {
+                    let (poc_msb, poc) = if is_idr_or_first {
                         self.prev_poc_msb = 0;
-                        self.prev_poc_lsb = 0;
-                        (0, 0)
+                        self.prev_poc_lsb = poc_lsb;
+                        (
+                            0,
+                            if first_header.unit_type.is_idr() {
+                                0
+                            } else {
+                                poc_lsb
+                            },
+                        )
                     } else {
                         let msb = if (poc_lsb < self.prev_poc_lsb)
                             && (self.prev_poc_lsb - poc_lsb >= max_poc_lsb / 2)
@@ -324,7 +337,7 @@ impl HwDecoder for VaapiH264Decoder {
                         };
                         (msb, msb + poc_lsb)
                     };
-                    if first_header.nal_ref_idc != 0 {
+                    if first_header.nal_ref_idc != 0 || is_idr_or_first {
                         self.prev_poc_msb = poc_msb;
                         self.prev_poc_lsb = poc_lsb;
                     }
@@ -333,8 +346,8 @@ impl HwDecoder for VaapiH264Decoder {
                 2 => {
                     let max_frame_num = 1i32 << (sps.log2_max_frame_num_minus4 + 4);
                     let frame_num = first_slice.frame_num as i32;
-                    if first_header.unit_type.is_idr() {
-                        self.prev_frame_num = 0;
+                    if is_idr_or_first {
+                        self.prev_frame_num = first_slice.frame_num;
                         self.prev_frame_num_offset = 0;
                         0
                     } else {
@@ -359,6 +372,7 @@ impl HwDecoder for VaapiH264Decoder {
                     .pic_order_cnt_lsb
                     .unwrap_or(first_slice.frame_num * 2) as i32,
             };
+            self.is_first_frame_after_reset = false;
 
             // Clear DPB on IDR
             if first_header.unit_type.is_idr() {
@@ -388,14 +402,46 @@ impl HwDecoder for VaapiH264Decoder {
                 }
             }
 
-            // Select a free surface that is not currently held as a reference in the DPB
-            let target_surface = pool
-                .surfaces
-                .iter()
-                .copied()
-                .find(|&surf| !self.dpb.frames.iter().any(|f| f.surface_id == surf))
-                .unwrap_or(pool.surfaces[self.cur_surface_idx]);
-            self.cur_surface_idx = (self.cur_surface_idx + 1) % pool.surfaces.len();
+            // Select a free surface using round-robin traversal across pool surfaces,
+            // strictly avoiding any surface held as a reference in the DPB, pending output,
+            // or currently displayed on screen (to prevent DMA-BUF presentation tearing).
+            let pool_len = pool.surfaces.len();
+            let mut chosen = None;
+            for i in 0..pool_len {
+                let idx = (self.cur_surface_idx + i) % pool_len;
+                let s = pool.surfaces[idx];
+                let in_dpb = self.dpb.frames.iter().any(|f| f.surface_id == s);
+                let in_output = self.output_queue.iter().any(|f| f.surface_id == s);
+                let is_displayed = self.last_output_surface_id == Some(s);
+                if !in_dpb && !in_output && !is_displayed {
+                    chosen = Some((s, (idx + 1) % pool_len));
+                    break;
+                }
+            }
+            let target_surface = match chosen {
+                Some((s, next_idx)) => {
+                    self.cur_surface_idx = next_idx;
+                    s
+                }
+                None => {
+                    let s =
+                        pool.surfaces
+                            .iter()
+                            .copied()
+                            .find(|&surf| {
+                                !self.dpb.frames.iter().any(|f| f.surface_id == surf)
+                                    && self.last_output_surface_id != Some(surf)
+                            })
+                            .or_else(|| {
+                                pool.surfaces.iter().copied().find(|&surf| {
+                                    !self.dpb.frames.iter().any(|f| f.surface_id == surf)
+                                })
+                            })
+                            .unwrap_or(pool.surfaces[self.cur_surface_idx]);
+                    self.cur_surface_idx = (self.cur_surface_idx + 1) % pool_len;
+                    s
+                }
+            };
 
             // Detect interlaced stream format (MBAFF / PAFF detection & progressive fallback)
             let interlace_mode = if sps.frame_mbs_only_flag {
@@ -707,7 +753,12 @@ impl HwDecoder for VaapiH264Decoder {
     }
 
     fn receive_frame(&mut self) -> Result<Option<DecodedFrame>, HwError> {
-        Ok(self.output_queue.pop_front())
+        if let Some(frame) = self.output_queue.pop_front() {
+            self.last_output_surface_id = Some(frame.surface_id);
+            Ok(Some(frame))
+        } else {
+            Ok(None)
+        }
     }
 
     fn flush(&mut self) -> Result<(), HwError> {
@@ -717,13 +768,10 @@ impl HwDecoder for VaapiH264Decoder {
                 .pool
                 .as_ref()
                 .and_then(|p| p.export_dmabuf_descriptor(rf.surface_id).ok());
-            let data = if dmabuf.is_none() {
-                self.pool
-                    .as_ref()
-                    .and_then(|p| p.read_surface_data(rf.surface_id, rf.width, rf.height).ok())
-            } else {
-                None
-            }; // lazy zero-copy
+            let data = self
+                .pool
+                .as_ref()
+                .and_then(|p| p.read_surface_data(rf.surface_id, rf.width, rf.height).ok());
             self.output_queue.push_back(DecodedFrame {
                 pts: rf.pts,
                 width: rf.width,
@@ -748,6 +796,9 @@ impl HwDecoder for VaapiH264Decoder {
         self.prev_poc_lsb = 0;
         self.prev_frame_num = 0;
         self.prev_frame_num_offset = 0;
+        self.is_first_frame_after_reset = true;
+        // Keep self.last_output_surface_id intact across reset so the newly decoded
+        // keyframe does not overwrite the surface currently held and displayed by the renderer.
         Ok(())
     }
 }

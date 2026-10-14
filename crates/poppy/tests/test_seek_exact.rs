@@ -246,3 +246,67 @@ fn test_seek_on_uranium() {
         prev_sec = sec;
     }
 }
+
+#[test]
+fn test_rapid_interactive_seeking_simulation() {
+    let video_path = PathBuf::from(
+        "/home/pikasu/Downloads/𝗠𝗢𝗡𝗧𝗔𝗚𝗘𝗠 𝗨𝗥𝗔𝗡𝗜𝗨𝗠 (𝗦𝗨𝗣𝗘𝗥 𝗦𝗟𝗢𝗪𝗘𝗗) - weekkse (1080p, h264).mp4",
+    );
+    if !video_path.exists() {
+        return;
+    }
+
+    let mut stream = poppy::open(&video_path).expect("open failed");
+    let tb = stream.time_base();
+
+    // Initial decode
+    let mut current_pos = 0.0;
+    for _ in 0..15 {
+        let f = stream.next_frame().unwrap().unwrap();
+        current_pos = tb.to_seconds(f.pts.unwrap());
+    }
+
+    // Sequence of interactive seeks (ArrowRight / ArrowLeft presses)
+    let deltas = [5.0, 5.0, -5.0, -5.0, 5.0, 5.0, 5.0, -5.0, -5.0, -5.0];
+    for (i, &delta) in deltas.iter().enumerate() {
+        let target = (current_pos + delta).max(0.0);
+        println!(
+            "[Seek #{i}] Seeking relative {delta:+.1}s from {current_pos:.2}s to target {target:.2}s"
+        );
+        let seek_frame = stream
+            .seek_exact(target)
+            .unwrap()
+            .expect("must produce frame");
+        let landed_sec = tb.to_seconds(seek_frame.pts.unwrap());
+        println!(
+            "  -> Landed at {landed_sec:.3}s (concealed: {})",
+            seek_frame.is_concealed
+        );
+        assert!(
+            !seek_frame.is_concealed,
+            "Seek frame must not be corrupted!"
+        );
+
+        // Decode subsequent frames and verify strictly ascending timestamps
+        let mut prev = landed_sec;
+        for frame_idx in 0..10 {
+            let f = stream.next_frame().unwrap().expect("must decode frame");
+            let s = tb.to_seconds(f.pts.unwrap());
+            assert!(
+                s > prev,
+                "Frame #{frame_idx} PTS {s:.3}s must be > prev {prev:.3}s"
+            );
+            assert!(!f.is_concealed, "Frame #{frame_idx} must not be concealed!");
+            prev = s;
+        }
+        current_pos = prev;
+
+        // Verify audio frame can also be decoded without stall
+        if let Some(af) = stream.next_audio_frame().unwrap()
+            && let Some(atb) = stream.audio_time_base()
+        {
+            let a_sec = af.pts.map(|p| atb.to_seconds(p)).unwrap_or(0.0);
+            println!("  -> Audio frame at {a_sec:.3}s");
+        }
+    }
+}
