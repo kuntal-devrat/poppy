@@ -4,17 +4,18 @@ on:
   workflow_dispatch:
     inputs:
       bump_type:
-        description: 'Version increment level'
+        description: 'Version increment level (auto detects from commit messages)'
         required: true
-        default: 'patch'
+        default: 'auto'
         type: choice
         options:
+          - auto
           - patch
           - minor
           - major
           - custom
       custom_version:
-        description: 'Custom semver version (e.g. 0.6.1; used if bump_type is custom)'
+        description: 'Custom semver version (e.g. 0.6.2; used if bump_type is custom)'
         required: false
         default: ''
         type: string
@@ -69,7 +70,7 @@ jobs:
           cargo test --workspace -- --test-threads=1
 
       - name: Commit, Tag, and Release
-        if: ${{ !inputs.dry_run }}
+        if: ${{ !inputs.dry_run && steps.bump.outputs.has_changed == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
