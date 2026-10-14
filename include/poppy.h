@@ -174,6 +174,12 @@ int32_t poppy_seek(PoppyStream* stream, int64_t timestamp_ticks);
  */
 int32_t poppy_seek_seconds(PoppyStream* stream, double seconds);
 
+/**
+ * @brief Precise timeline seek: seeks to preceding keyframe and decodes forward to seconds.
+ * If out_frame is non-null, receives pointer to decoded frame (free with poppy_free_frame).
+ */
+int32_t poppy_seek_exact(PoppyStream* stream, double seconds, PoppyFrame** out_frame);
+
 /* ========================================================================= */
 /* Frame Inspection and GPU Zero-Copy Export                                 */
 /* ========================================================================= */

@@ -148,21 +148,25 @@ impl VideoPlayerApp {
         };
 
         println!("⏩ Seeking to {:.2}s...", target);
-        #[allow(clippy::collapsible_if)]
+        let stream_target = self.first_pts_sec + target;
         if let Some(stream) = &mut self.stream {
-            if let Err(e) = stream.seek_seconds(target) {
-                eprintln!("⚠️ Seek error: {e}");
+            match stream.seek_exact(stream_target) {
+                Ok(Some(frame)) => {
+                    self.video_width = frame.width;
+                    self.video_height = frame.height;
+                    if let Some(pts) = frame.pts {
+                        self.current_pts_sec = stream.time_base().to_seconds(pts);
+                    }
+                    self.current_frame = Some(frame);
+                    self.frame_count += 1;
+                }
+                Ok(None) => {}
+                Err(e) => eprintln!("⚠️ Seek error: {e}"),
             }
         }
 
-        // Advance to the actual keyframe the decoder landed on so we know the true stream position
-        let actual_pos = if let Ok(true) = self.advance_frame() {
-            self.relative_position()
-        } else {
-            target
-        };
-
-        // Snap both the audio sink clock and master playback anchor to the landed keyframe timestamp
+        // Snap both the audio sink clock and master playback anchor to the landed frame timestamp
+        let actual_pos = self.relative_position();
         if let Some(sink) = &self.audio_sink {
             sink.reset_to(actual_pos);
         }
@@ -477,23 +481,7 @@ impl ApplicationHandler for VideoPlayerApp {
                 }
                 KeyCode::KeyR => {
                     println!("🔄 Replaying from start...");
-                    if let Some(stream) = &mut self.stream {
-                        let _ = stream.seek_seconds(0.0);
-                    }
-                    let actual_pos = if let Ok(true) = self.advance_frame() {
-                        self.relative_position()
-                    } else {
-                        0.0
-                    };
-                    if let Some(sink) = &self.audio_sink {
-                        sink.reset_to(actual_pos);
-                    }
-                    self.paused_at_position = actual_pos;
-                    self.playback_start = Some(Instant::now());
-                    self.pump_audio();
-                    if let Some(w) = &self.window {
-                        w.request_redraw();
-                    }
+                    self.seek_relative(-self.relative_position());
                 }
                 KeyCode::Escape | KeyCode::KeyQ => {
                     println!("\n👋 Exiting.");

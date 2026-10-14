@@ -510,40 +510,5 @@ fn perform_scrub(
     stream: &mut MediaStream,
     target_seconds: f64,
 ) -> Result<Option<DecodedFrame>, PoppyError> {
-    const MAX_SCRUB_FRAMES: usize = 300;
-    const MAX_SCRUB_TIME: std::time::Duration = std::time::Duration::from_secs(2);
-    if !target_seconds.is_finite() {
-        return Err(PoppyError::InvalidSeek(format!(
-            "non-finite scrub target {target_seconds}"
-        )));
-    }
-    stream.seek_seconds(target_seconds)?;
-    let time_base = stream.time_base();
-    let start = std::time::Instant::now();
-    let mut best_frame = None;
-    let mut min_diff = f64::MAX;
-    let mut decoded = 0usize;
-
-    while let Some(frame) = stream.next_frame()? {
-        decoded += 1;
-        if let Some(pts) = frame.pts {
-            let frame_sec = time_base.to_seconds(pts);
-            let diff = (frame_sec - target_seconds).abs();
-            if diff <= min_diff {
-                min_diff = diff;
-                best_frame = Some(frame);
-            }
-            if frame_sec >= target_seconds {
-                break;
-            }
-        } else {
-            best_frame = Some(frame);
-            break;
-        }
-        if decoded >= MAX_SCRUB_FRAMES || start.elapsed() >= MAX_SCRUB_TIME {
-            break;
-        }
-    }
-
-    Ok(best_frame)
+    stream.seek_exact(target_seconds)
 }

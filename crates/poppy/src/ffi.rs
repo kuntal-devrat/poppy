@@ -543,6 +543,69 @@ pub unsafe extern "C" fn poppy_seek_seconds(stream: *mut PoppyStream, seconds: c
     }
 }
 
+/// Precise timeline seeking: seeks to preceding keyframe and decodes forward
+/// to the exact frame closest to `seconds`.
+///
+/// If `out_frame` is non-null, writes a pointer to the newly decoded `PoppyFrame` at `seconds`.
+/// The caller must free it with `poppy_free_frame`.
+///
+/// # Safety
+/// `stream` must point to an open, valid `PoppyStream`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn poppy_seek_exact(
+    stream: *mut PoppyStream,
+    seconds: c_double,
+    out_frame: *mut *mut PoppyFrame,
+) -> c_int {
+    if stream.is_null() {
+        return POPPY_ERR_NULL_PTR;
+    }
+    if !seconds.is_finite() {
+        set_last_error("seek_exact: non-finite timestamp");
+        return POPPY_ERR_INVALID_DATA;
+    }
+    let res = catch_unwind(AssertUnwindSafe(|| {
+        let s = unsafe { &*stream };
+        let mut guard = match s.inner.lock() {
+            Ok(g) => g,
+            Err(_) => {
+                set_last_error("PoppyStream mutex poisoned");
+                return POPPY_ERR_PANIC;
+            }
+        };
+        match guard.seek_exact(seconds) {
+            Ok(Some(frame)) => {
+                if !out_frame.is_null() {
+                    let boxed = Box::new(PoppyFrame { inner: frame });
+                    unsafe {
+                        *out_frame = Box::into_raw(boxed);
+                    }
+                }
+                POPPY_OK
+            }
+            Ok(None) => {
+                if !out_frame.is_null() {
+                    unsafe {
+                        *out_frame = std::ptr::null_mut();
+                    }
+                }
+                POPPY_OK
+            }
+            Err(e) => {
+                set_last_error(&e.to_string());
+                POPPY_ERR_IO
+            }
+        }
+    }));
+    match res {
+        Ok(c) => c,
+        Err(_) => {
+            set_last_error("Panic in poppy_seek_exact");
+            POPPY_ERR_PANIC
+        }
+    }
+}
+
 /// Retrieves frame dimensions (width and height in pixels).
 ///
 /// # Safety

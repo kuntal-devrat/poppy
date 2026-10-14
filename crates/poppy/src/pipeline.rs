@@ -629,6 +629,74 @@ impl MediaStream {
         self.seek(ticks)
     }
 
+    /// Precise seeking: seeks container to the preceding keyframe and decodes forward
+    /// until reaching the frame at or closest to `target_seconds`.
+    /// Also drains and synchronizes the audio track so audio and video are locked
+    /// to `target_seconds`.
+    ///
+    /// Returns the decoded frame at `target_seconds`, or `None` if end-of-stream.
+    pub fn seek_exact(&mut self, target_seconds: f64) -> Result<Option<DecodedFrame>, PoppyError> {
+        if !target_seconds.is_finite() {
+            return Err(PoppyError::InvalidSeek(format!(
+                "non-finite seek target {target_seconds}"
+            )));
+        }
+
+        self.seek_seconds(target_seconds)?;
+        let tb = self.time_base();
+
+        let mut best_frame: Option<DecodedFrame> = None;
+        const MAX_PREROLL_FRAMES: usize = 600;
+        const MAX_PREROLL_DURATION: std::time::Duration = std::time::Duration::from_millis(1500);
+        let start_time = std::time::Instant::now();
+        let mut decoded = 0;
+
+        while let Some(frame) = self.next_frame()? {
+            decoded += 1;
+            if let Some(pts) = frame.pts {
+                let sec = tb.to_seconds(pts);
+                best_frame = Some(frame);
+                if sec >= target_seconds {
+                    break;
+                }
+            } else {
+                best_frame = Some(frame);
+                break;
+            }
+            if decoded >= MAX_PREROLL_FRAMES || start_time.elapsed() >= MAX_PREROLL_DURATION {
+                break;
+            }
+        }
+
+        // Synchronize audio track up to target_seconds
+        if let Some(audio_tb) = self.audio_time_base() {
+            let mut audio_decoded = 0;
+            const MAX_AUDIO_PREROLL: usize = 600;
+            while audio_decoded < MAX_AUDIO_PREROLL {
+                match self.next_audio_frame()? {
+                    Some(af) => {
+                        audio_decoded += 1;
+                        let af_sec = af.pts.map(|p| audio_tb.to_seconds(p)).unwrap_or(0.0);
+                        let dur_sec = if af.sample_rate > 0 {
+                            af.samples.len() as f64
+                                / (af.sample_rate as f64 * af.channels.max(1) as f64)
+                        } else {
+                            0.0
+                        };
+                        // Keep audio frame that intersects or follows target_seconds
+                        if af_sec + dur_sec >= target_seconds {
+                            self.pending_audio_frames.push_front(af);
+                            break;
+                        }
+                    }
+                    None => break,
+                }
+            }
+        }
+
+        Ok(best_frame)
+    }
+
     /// Returns the target video track's rational time base.
     pub fn time_base(&self) -> poppy_core::TimeBase {
         self.demuxer.streams()[self.target_stream_index].time_base

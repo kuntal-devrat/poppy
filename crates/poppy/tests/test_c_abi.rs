@@ -151,6 +151,11 @@ fn test_c_abi_full_pipeline_on_real_video() {
 
         // Seek
         assert_eq!(poppy_seek_seconds(stream, 0.0), POPPY_OK);
+        let mut exact_frame: *mut PoppyFrame = std::ptr::null_mut();
+        assert_eq!(poppy_seek_exact(stream, 0.5, &mut exact_frame), POPPY_OK);
+        if !exact_frame.is_null() {
+            assert_eq!(poppy_free_frame(exact_frame), POPPY_OK);
+        }
 
         // Free frame
         assert_eq!(poppy_free_frame(frame), POPPY_OK);
@@ -356,6 +361,7 @@ fn test_c_abi_header_parity() {
         "poppy_read_frame",
         "poppy_seek",
         "poppy_seek_seconds",
+        "poppy_seek_exact",
         "poppy_frame_get_dimensions",
         "poppy_frame_get_pts",
         "poppy_frame_get_pts_seconds",
