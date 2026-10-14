@@ -41,7 +41,7 @@ jobs:
             "poppy-audio"
             "poppy-hw"
             "poppy-render"
-            "poppy"
+            "poppy-media"
             "poppy-cli"
           )
 

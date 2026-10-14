@@ -32,7 +32,8 @@ poppy-vp9 = { version = "0.6.0", path = "crates/poppy-vp9" }
 poppy-audio = { version = "0.6.0", path = "crates/poppy-audio" }
 poppy-hw = { version = "0.6.0", path = "crates/poppy-hw" }
 poppy-render = { version = "0.6.0", path = "crates/poppy-render" }
-poppy = { version = "0.6.0", path = "crates/poppy" }
+poppy = { version = "0.6.0", path = "crates/poppy", package = "poppy-media" }
+poppy-media = { version = "0.6.0", path = "crates/poppy" }
 
 # Shared external dependencies
 bytes = "1"
