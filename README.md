@@ -6,8 +6,8 @@
 
 **A modern, memory-safe media pipeline with zero-copy hardware acceleration.**
 
-[![Crates.io](https://img.shields.io/badge/crates.io-v0.6.0-orange.svg?style=flat-square)](https://crates.io/crates/poppy)
-[![Documentation](https://img.shields.io/badge/docs.rs-poppy-blue.svg?style=flat-square)](https://docs.rs/poppy)
+[![Crates.io](https://img.shields.io/badge/crates.io-v0.6.0-orange.svg?style=flat-square)](https://crates.io/crates/poppy-media)
+[![Documentation](https://img.shields.io/badge/docs.rs-poppy--media-blue.svg?style=flat-square)](https://docs.rs/poppy-media)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg?style=flat-square)](#-license)
 [![Rust Edition](https://img.shields.io/badge/rustc-2024%20(1.85%2B)-red.svg?style=flat-square)](https://www.rust-lang.org)
 [![CI](https://img.shields.io/badge/CI-passing-brightgreen.svg?style=flat-square)](https://github.com/kuntal-devrat/poppy/actions)
@@ -75,7 +75,7 @@ Add `poppy` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-poppy = "0.6.0"
+poppy = { version = "0.6.0", package = "poppy-media" }
 tokio = { version = "1", features = ["full"] }
 futures-util = "0.3"
 ```
@@ -261,7 +261,7 @@ For complete technical specifications, see [`docs/ARCHITECTURE.md`](docs/ARCHITE
  
 | Crate | Purpose | Crates.io |
 |---|---|:---:|
-| [`poppy`](crates/poppy) | High-level facade, Tokio async stream, and C ABI (`libpoppy.so`) | [![Crates.io](https://img.shields.io/badge/poppy-0.6.0-orange.svg)](https://crates.io/crates/poppy) |
+| [`poppy-media`](crates/poppy) | High-level facade, Tokio async stream, and C ABI (`libpoppy.so`) | [![Crates.io](https://img.shields.io/badge/poppy--media-0.6.0-orange.svg)](https://crates.io/crates/poppy-media) |
 | [`poppy-core`](crates/poppy-core) | Foundational types (`Packet`, `TimeBase`, `StreamInfo`, `PixelFormat`) | [![Crates.io](https://img.shields.io/badge/poppy--core-0.6.0-orange.svg)](https://crates.io/crates/poppy-core) |
 | [`poppy-demux`](crates/poppy-demux) | Pure safe-Rust MP4, MKV/WebM, and MPEG-TS container demuxers + Annex-B BSF | [![Crates.io](https://img.shields.io/badge/poppy--demux-0.6.0-orange.svg)](https://crates.io/crates/poppy-demux) |
 | [`poppy-h264`](crates/poppy-h264) | H.264 NAL, SPS, PPS, and slice header parser | [![Crates.io](https://img.shields.io/badge/poppy--h264-0.6.0-orange.svg)](https://crates.io/crates/poppy-h264) |
