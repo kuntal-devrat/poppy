@@ -912,8 +912,6 @@ fn parse_stsd(
                     for (c_header, c_body, _) in BoxIter::new(child_boxes, child_offset).flatten() {
                         if &c_header.box_type == b"esds" {
                             // Only use AudioSpecificConfig on successful parse.
-                            // Previously stored the entire esds box as extradata
-                            // on failure, feeding version/flags/tags to decoders.
                             extradata = extract_esds_audio_specific_config(c_body);
                             break;
                         } else if &c_header.box_type == b"dOps" || &c_header.box_type == b"dfLa" {

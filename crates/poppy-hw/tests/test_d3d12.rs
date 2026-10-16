@@ -9,7 +9,7 @@ use std::path::Path;
 
 #[test]
 fn test_d3d12_device_and_pool_initialization() {
-    // Honest backend: D3D12 COM not implemented — open() must fail, not fabricate handles.
+    // Verify device opening returns NoDeviceFound when D3D12 hardware is unavailable.
     // Pool allocation (pure metadata) still works for unit testing.
     #[cfg(not(target_os = "windows"))]
     {
@@ -23,31 +23,21 @@ fn test_d3d12_device_and_pool_initialization() {
         // On Windows CI without GPU, open() returns Err(NoDeviceFound); on real GPU it succeeds.
         let _ = D3D12VideoDevice::open();
     }
-    // Pool shim test (no hardware needed).
-    let device = D3D12VideoDevice {
-        adapter_name: "test".into(),
+    // Direct3D 12 requires a valid ID3D12Device pointer; null device allocation must fail cleanly.
+    let uninit_device = D3D12VideoDevice {
+        adapter_name: "uninitialized".into(),
         is_hardware: false,
         device_ptr: std::ptr::null_mut(),
         video_device_ptr: std::ptr::null_mut(),
     };
-    assert!(device.supports_decode(CodecId::H264));
-    assert!(device.supports_decode(CodecId::Hevc));
-    assert!(device.supports_decode(CodecId::Av1));
+    assert!(uninit_device.supports_decode(CodecId::H264));
+    assert!(uninit_device.supports_decode(CodecId::Hevc));
+    assert!(uninit_device.supports_decode(CodecId::Av1));
 
-    let pool = D3D12SurfacePool::new(&device, 1920, 1080, 8, false)
-        .expect("D3D12 surface pool allocation");
-    assert_eq!(pool.surfaces.len(), 8);
-    assert_eq!(pool.surfaces[0].width, 1920);
-    assert_eq!(pool.surfaces[0].height, 1080);
-    assert_eq!(pool.surfaces[0].format, 103); // DXGI_FORMAT_NV12
-
-    let shared_handle = pool
-        .export_shared_handle(pool.surfaces[0].id)
-        .expect("export shared handle");
-    assert_eq!(shared_handle.width, 1920);
-    assert_eq!(shared_handle.height, 1080);
-    assert_eq!(shared_handle.dxgi_format, 103);
-    assert!(shared_handle.handle != 0);
+    assert!(
+        D3D12SurfacePool::new(&uninit_device, 1920, 1080, 8, false).is_err(),
+        "Allocation on uninitialized device pointer must fail"
+    );
 }
 
 #[test]
@@ -187,7 +177,7 @@ fn test_d3d12_multislice_batching_and_decode_on_real_video() {
             decoded_frames > 0,
             "D3D12 decoder should have decoded frames from multislice video"
         );
-        println!("✅ D3D12 multi-slice batching decoded {decoded_frames} frames successfully");
+        println!("D3D12 multi-slice batching decoded {decoded_frames} frames successfully");
     }
 }
 
@@ -234,6 +224,6 @@ fn test_d3d12_error_resilience_and_corrupt_stream_handling() {
             );
         }
 
-        println!("✅ D3D12 decoder survived corrupted packets gracefully");
+        println!("D3D12 decoder survived corrupted packets gracefully");
     }
 }

@@ -61,7 +61,7 @@ def detect_bump_type_from_git(root: Path) -> str:
         )
         messages = [m.strip() for m in log_proc.stdout.split("\x1f") if m.strip()]
         if not messages:
-            print(f"ℹ️ No new commits detected since tag '{latest_tag}'.")
+            print(f"No new commits detected since tag '{latest_tag}'.")
             return "none"
 
         has_breaking = False
@@ -81,16 +81,16 @@ def detect_bump_type_from_git(root: Path) -> str:
                 has_feat = True
 
         if has_breaking:
-            print(f"🔍 Analyzed {len(messages)} commits since {latest_tag}: Found BREAKING CHANGE -> Bumping MAJOR")
+            print(f"Analyzed {len(messages)} commits since {latest_tag}: Found BREAKING CHANGE -> Bumping MAJOR")
             return "major"
         elif has_feat:
-            print(f"🔍 Analyzed {len(messages)} commits since {latest_tag}: Found new feature ('feat:') -> Bumping MINOR")
+            print(f"Analyzed {len(messages)} commits since {latest_tag}: Found new feature ('feat:') -> Bumping MINOR")
             return "minor"
         else:
-            print(f"🔍 Analyzed {len(messages)} commits since {latest_tag}: Found fixes / maintenance -> Bumping PATCH")
+            print(f"Analyzed {len(messages)} commits since {latest_tag}: Found fixes / maintenance -> Bumping PATCH")
             return "patch"
     except Exception as e:
-        print(f"⚠️ Git history inspection failed ({e}), defaulting to patch bump.")
+        print(f"Warning: git history inspection failed ({e}), defaulting to patch bump.")
         return "patch"
 
 
@@ -146,11 +146,11 @@ def update_cargo_toml(root: Path, new_version: str) -> None:
     content = re.sub(dep_pattern, rf'\g<1>"{new_version}"', content)
 
     cargo_path.write_text(content, encoding="utf-8")
-    print(f"✅ Updated Cargo.toml to version {new_version}")
+    print(f"Updated Cargo.toml to version {new_version}")
 
 
 def sync_cargo_lock(root: Path) -> None:
-    print("🔄 Running `cargo check --workspace` to update Cargo.lock...")
+    print("Running `cargo check --workspace` to update Cargo.lock...")
     res = subprocess.run(
         ["cargo", "check", "--workspace"],
         cwd=root,
@@ -158,9 +158,9 @@ def sync_cargo_lock(root: Path) -> None:
         text=True,
     )
     if res.returncode != 0:
-        print(f"❌ Error updating Cargo.lock:\n{res.stderr}", file=sys.stderr)
+        print(f"Error updating Cargo.lock:\n{res.stderr}", file=sys.stderr)
         sys.exit(1)
-    print("✅ Cargo.lock successfully synchronized with all workspace crates.")
+    print("Cargo.lock successfully synchronized with all workspace crates.")
 
 
 def export_github_output(new_version: str, previous_version: str) -> None:
@@ -172,14 +172,14 @@ def export_github_output(new_version: str, previous_version: str) -> None:
             f.write(f"tag=v{new_version}\n")
             f.write(f"release_title=v{new_version}\n")
             f.write(f"has_changed={'true' if new_version != previous_version else 'false'}\n")
-        print(f"📤 Exported GitHub Actions output: v{new_version}")
+        print(f"Exported GitHub Actions output: v{new_version}")
 
 
 def main():
     root = get_workspace_root()
     cargo_path = root / "Cargo.toml"
     if not cargo_path.exists():
-        print(f"❌ Cargo.toml not found at {cargo_path}", file=sys.stderr)
+        print(f"Error: Cargo.toml not found at {cargo_path}", file=sys.stderr)
         sys.exit(1)
 
     bump_type = sys.argv[1] if len(sys.argv) > 1 else "auto"
@@ -190,23 +190,23 @@ def main():
     new_version = compute_new_version(root, current_version, bump_type, custom_version)
 
     print("==================================================")
-    print("🌸 Poppy Workspace Version Bumper")
+    print("Poppy Workspace Version Bumper")
     print(f"Current version:  {current_version}")
     print(f"Bump type:        {bump_type}")
     print(f"Target version:   {new_version}")
     print("==================================================")
 
     if current_version == new_version:
-        print("⚠️ Current version already matches target version. No changes needed.")
+        print("Current version already matches target version. No changes needed.")
     else:
         update_cargo_toml(root, new_version)
         sync_cargo_lock(root)
 
     export_github_output(new_version, current_version)
     if current_version != new_version:
-        print(f"\n🎉 Successfully bumped Poppy workspace to v{new_version}!")
+        print(f"\nSuccessfully bumped Poppy workspace to v{new_version}.")
     else:
-        print(f"\n✨ Workspace is up to date at v{current_version}.")
+        print(f"\nWorkspace is up to date at v{current_version}.")
 
 
 if __name__ == "__main__":

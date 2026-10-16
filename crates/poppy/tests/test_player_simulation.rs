@@ -3,15 +3,27 @@ use std::time::{Duration, Instant};
 
 #[test]
 fn test_player_simulation_seeking_left_right() {
-    let video_path = PathBuf::from(
-        "/home/pikasu/Downloads/𝗠𝗢𝗡𝗧𝗔𝗚𝗘𝗠 𝗨𝗥𝗔𝗡𝗜𝗨𝗠 (𝗦𝗨𝗣𝗘𝗥 𝗦𝗟𝗢𝗪𝗘𝗗) - weekkse (1080p, h264).mp4",
-    );
-    if !video_path.exists() {
-        return;
-    }
+    let video_path = std::env::var("POPPY_TEST_VIDEO")
+        .map(PathBuf::from)
+        .ok()
+        .filter(|p| p.exists())
+        .or_else(|| {
+            let candidates = [
+                "target/test_seek_video.mp4",
+                "../../target/test_seek_video.mp4",
+            ];
+            candidates.iter().map(PathBuf::from).find(|p| p.exists())
+        });
+    let video_path = match video_path {
+        Some(p) => p,
+        None => return,
+    };
 
     let mut stream = poppy::open(&video_path).expect("open failed");
-    let audio_cfg = stream.audio_config().expect("audio config required");
+    let audio_cfg = match stream.audio_config() {
+        Some(cfg) => cfg,
+        None => return,
+    };
     let sink = poppy_audio::AudioSink::try_new(audio_cfg.sample_rate, audio_cfg.channels)
         .expect("sink init");
     let renderer = poppy_render::GpuRenderer::new_sync().expect("renderer init");

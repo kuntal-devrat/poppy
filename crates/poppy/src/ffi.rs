@@ -91,7 +91,6 @@ fn codec_to_c_int(c: CodecId) -> c_int {
 /// Returns the semver version string of Poppy (from Cargo.toml).
 #[unsafe(no_mangle)]
 pub extern "C" fn poppy_version() -> *const c_char {
-    // CARGO_PKG_VERSION is baked at compile time, never drifts from Cargo.toml.
     static VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\0");
     VERSION.as_ptr() as *const c_char
 }

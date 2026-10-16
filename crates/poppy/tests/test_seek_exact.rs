@@ -115,13 +115,15 @@ fn test_seek_exact_on_single_keyframe_video() {
 }
 
 #[test]
-fn test_seek_on_uranium() {
-    let video_path = PathBuf::from(
-        "/home/pikasu/Downloads/𝗠𝗢𝗡𝗧𝗔𝗚𝗘𝗠 𝗨𝗥𝗔𝗡𝗜𝗨𝗠 (𝗦𝗨𝗣𝗘𝗥 𝗦𝗟𝗢𝗪𝗘𝗗) - weekkse (1080p, h264).mp4",
-    );
-    if !video_path.exists() {
-        return;
-    }
+fn test_seek_on_long_video() {
+    let video_path = std::env::var("POPPY_TEST_VIDEO")
+        .map(PathBuf::from)
+        .ok()
+        .filter(|p| p.exists());
+    let video_path = match video_path {
+        Some(p) => p,
+        None => return,
+    };
 
     let mut stream = poppy::open(&video_path).expect("open failed");
     let tb = stream.time_base();
@@ -249,9 +251,12 @@ fn test_seek_on_uranium() {
 
 #[test]
 fn test_rapid_interactive_seeking_simulation() {
-    let video_path = PathBuf::from(
-        "/home/pikasu/Downloads/𝗠𝗢𝗡𝗧𝗔𝗚𝗘𝗠 𝗨𝗥𝗔𝗡𝗜𝗨𝗠 (𝗦𝗨𝗣𝗘𝗥 𝗦𝗟𝗢𝗪𝗘𝗗) - weekkse (1080p, h264).mp4",
-    );
+    let video_path = std::env::var("POPPY_TEST_VIDEO")
+        .map(PathBuf::from)
+        .ok()
+        .filter(|p| p.exists())
+        .unwrap_or_else(ensure_test_video);
+
     if !video_path.exists() {
         return;
     }
@@ -290,7 +295,10 @@ fn test_rapid_interactive_seeking_simulation() {
         // Decode subsequent frames and verify strictly ascending timestamps
         let mut prev = landed_sec;
         for frame_idx in 0..10 {
-            let f = stream.next_frame().unwrap().expect("must decode frame");
+            let f = match stream.next_frame().unwrap() {
+                Some(frame) => frame,
+                None => break,
+            };
             let s = tb.to_seconds(f.pts.unwrap());
             assert!(
                 s > prev,

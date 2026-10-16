@@ -704,7 +704,7 @@ impl HwDecoder for VaapiHevcDecoder {
                     } else {
                         0
                     };
-                    // Prediction weights (previously parsed-and-discarded; now mapped).
+                    // Map prediction weights if present.
                     if let Some(pw) = &slice.pred_weights {
                         slice_param.luma_log2_weight_denom = pw.luma_log2_weight_denom.min(7) as u8;
                         slice_param.delta_chroma_log2_weight_denom =

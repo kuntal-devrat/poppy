@@ -1,10 +1,10 @@
-# Contributing to Project Poppy 🌸
+# Contributing to Project Poppy
 
 Thank you for your interest in contributing to Poppy! Whether you are reporting a bug, proposing an optimization, adding a hardware backend, or improving documentation, your help is welcome.
 
 ---
 
-## 🛠️ Development Setup
+## Development Setup
 
 ### Prerequisites
 - **Rust 1.85+** (Rust Edition 2024 support required).
@@ -22,7 +22,7 @@ cargo build --workspace
 
 ---
 
-## 🧪 Testing Guidelines
+## Testing Guidelines
 
 Before opening a pull request, ensure all workspace tests pass:
 
@@ -42,7 +42,7 @@ cargo doc --workspace --no-deps
 
 ---
 
-## ⚡ Fuzz Testing
+## Fuzz Testing
 
 Poppy enforces structure-aware fuzzing on all container demuxers and bitstream parsers. If you modify parser code in `poppy-demux`, `poppy-h264`, `poppy-hevc`, or `poppy-av1`, you must run the relevant fuzz targets:
 
@@ -60,7 +60,7 @@ cargo fuzz run fuzz_av1_parse -- -max_total_time=60
 
 ---
 
-## 📋 Pull Request Process
+## Pull Request Process
 
 1. **Fork and Branch**: Create a feature branch from `main` (e.g. `feat/vulkan-modifier-fallback`).
 2. **Commit Conventions**: Use clear, concise commit messages adhering to Conventional Commits:

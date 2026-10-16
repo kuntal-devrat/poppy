@@ -594,13 +594,10 @@ impl VpcCRecord {
 
     /// Parses a `vpcC` box payload from raw bytes.
     ///
-    /// The VP Codec ISO binding defines `vpcC` as a FullBox (1B version +
-    /// 3B flags, all zero except version==1). Some WebM-derived muxers store
-    /// the raw 8-byte record without the FullBox header. We detect FullBox
-    /// strictly: `len >= 12` (or 10 for the minimal form), `data[0] <= 1`
-    /// (version) and `data[1..4] == [0,0,0]` (flags). The previous heuristic
-    /// (`data[0]==0||1` alone) misclassified raw records starting with
-    /// profile 0/1 as FullBox and parsed garbage.
+    /// The VP Codec ISO binding defines `vpcC` as a FullBox (1-byte version +
+    /// 3-byte flags). Some WebM-derived muxers store the raw record without
+    /// the FullBox header. FullBox format is recognized when flags are all zero
+    /// and version is 0 or 1 with at least 10 bytes available.
     pub fn parse(data: &[u8]) -> Result<Self, VpcCParseError> {
         let is_fullbox = data.len() >= 10
             && data[0] <= 1

@@ -102,6 +102,13 @@ pub const IID_ID3D12DEVICE: GUID = GUID::from_values(
     [0xBE, 0x54, 0x18, 0x21, 0x33, 0x9B, 0x85, 0xF7],
 );
 
+pub const IID_ID3D12RESOURCE: GUID = GUID::from_values(
+    0x696442BE,
+    0xA72E,
+    0x4059,
+    [0xBC, 0x79, 0x5B, 0x5C, 0x98, 0x04, 0x0F, 0xAD],
+);
+
 pub type HRESULT = i32;
 pub const S_OK: HRESULT = 0;
 pub const E_FAIL: HRESULT = -2147467259; // 0x80004005

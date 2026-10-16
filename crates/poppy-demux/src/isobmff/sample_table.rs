@@ -344,7 +344,7 @@ impl StszTable {
 }
 
 /// Raw parsed data from `stz2` (Compact Sample Size Box).
-/// Common with encrypted content; previously ignored which caused silent data loss.
+/// Supports 4-bit, 8-bit, and 16-bit field size sample entries.
 #[derive(Debug, Clone, Default)]
 pub struct Stz2Table {
     pub sample_sizes: Vec<u32>,
@@ -633,8 +633,7 @@ impl SampleTable {
             });
         }
 
-        // Validate required boxes: stsc and chunk offsets must be non-empty
-        // when samples exist. Previously silently produced zero samples.
+        // Validate required boxes: stsc and chunk offsets must be non-empty when samples exist.
         if stsc.entries.is_empty() {
             return Err(DemuxError::InvalidBox {
                 offset: 0,

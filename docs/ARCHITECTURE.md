@@ -1,6 +1,6 @@
 # Project Poppy: Architectural Guide & Technical Specification
 
-> **Version:** 0.6.0 (Production Release)  
+> **Version:** 0.6.1  
 > **Status:** Active Development & Stabilization  
 > **Repository:** [https://github.com/kuntal-devrat/poppy](https://github.com/kuntal-devrat/poppy)
 
@@ -11,10 +11,10 @@
 **Project Poppy** is a modern, memory-safe media pipeline designed from the ground up in Rust (2024 Edition) to deliver high-throughput, low-latency video demuxing and hardware-accelerated video decoding.
 
 Unlike legacy multimedia frameworks that rely on decades-old C codebases fraught with memory safety vulnerabilities and buffer-copy overheads, Poppy guarantees:
-1. **100% Safe Memory Demuxing**: Zero unsafe code in container demuxers (ISOBMFF/MP4 and EBML/Matroska) and bitstream header parsers (H.264, HEVC, AV1).
-2. **True Zero-Copy GPU Interop**: Decoded video frames remain in dedicated GPU VRAM from hardware decode through to display presentation via direct Linux DMA-BUF, Windows DXGI Shared Handles, and macOS CVPixelBuffers.
-3. **Ergonomic Async Facade**: Seamless integration with the Tokio asynchronous runtime, providing bounded backpressure, stream scrubbing, and sub-millisecond keyframe seeking.
-4. **Universal C ABI**: A stable, exception-safe native interface (`libpoppy.so`, `poppy.h`) providing native bindings for C, C++, Python, and embedding applications.
+1. **Safe Container Demuxing**: Zero unsafe code in container demuxers (ISOBMFF/MP4 and EBML/Matroska) and bitstream header parsers (H.264, HEVC, AV1, VP9).
+2. **Zero-Copy Presentation**: Decoded video frames remain in GPU VRAM from hardware decode through presentation using DRM PRIME DMA-BUF on Linux, with DXGI and Metal zero-copy pathways supported in architecture.
+3. **Async Streaming**: Tokio stream interface providing bounded backpressure, stream scrubbing, and keyframe seeking.
+4. **C ABI Interface**: Native shared library (`libpoppy.so`, `poppy.h`) providing C-compatible entry points with panic barriers and error reporting.
 
 ---
 
@@ -122,26 +122,24 @@ pub trait HwDecoder: Send {
     fn receive_frame(&mut self) -> Result<Option<DecodedFrame>, HwError>;
     fn flush(&mut self) -> Result<(), HwError>;
     fn reset(&mut self) -> Result<(), HwError>;
-}
-// Note: Linux VA-API is a real dlopen(libva) backend. Windows D3D12 and macOS
-// VideoToolbox are currently metadata-only shims (create_decoder returns
-// NoDeviceFound); see poppy-hw/src/lib.rs.
 ```
 
 ### Backend Implementations
 
-1. **Linux: VA-API (`VaapiDecoder`)**:
+1. **Linux: VA-API (`VaapiDecoder`) [Production]**:
    - Implements hardware decoding on Intel (i965 / Intel Media Driver) and AMD (Radeon radeonsi) hardware via `libva.so.2`.
    - Profiles: `VAProfileH264High`, `VAProfileHEVCMain`, `VAProfileHEVCMain10`, `VAProfileAV1Profile0`.
    - Surface Export: Maps hardware decoding surfaces to Linux DRM PRIME DMA-BUF file descriptors (`vaExportSurfaceHandle`).
 
-2. **Windows: Direct3D 12 Video (`D3D12Decoder`)**:
-   - Hardware decoding using `ID3D12VideoDecoder` and `ID3D12VideoDecodeCommandList`.
+2. **Windows: Direct3D 12 Video (`D3D12Decoder`) [Interface / Roadmap]**:
+   - Target design: Hardware decoding using `ID3D12VideoDecoder` and `ID3D12VideoDecodeCommandList`.
    - Native surface export using DXGI Shared Handles (`CreateSharedHandle`).
+   - Current status: Interface types and render bridging descriptors are implemented; decoder instantiation returns `HwError::NoDeviceFound` until the full COM decode pipeline is enabled.
 
-3. **macOS: VideoToolbox (`VideoToolboxDecoder`)**:
-   - Hardware decoding via `VTDecompressionSessionCreate` and `VTDecompressionSessionDecodeFrame`.
+3. **macOS: VideoToolbox (`VideoToolboxDecoder`) [Interface / Roadmap]**:
+   - Target design: Hardware decoding via `VTDecompressionSessionCreate` and `VTDecompressionSessionDecodeFrame`.
    - Output surfaces retained as CoreVideo `CVPixelBuffer` handles for Metal texture cache binding.
+   - Current status: Interface types and render bridging descriptors are implemented; decoder instantiation returns `HwError::NoDeviceFound` until session bindings are enabled.
 
 ### Error Concealment & Robustness
 When bitstream packets are dropped or contain transmission corruptions:
@@ -218,7 +216,7 @@ stream.seek_seconds(45.5).await?;
 Poppy exports a stable, thread-safe, and panic-safe C ABI defined in `include/poppy.h`.
 
 ### Safety Guarantees
-- **All entry points catch Rust panics**: Handled via `std::panic::catch_unwind(AssertUnwindSafe(...))`. Under no circumstances will a panic unwind across the FFI boundary.
+- **Panic barrier on all entry points**: Wrapped with `std::panic::catch_unwind(AssertUnwindSafe(...))` to prevent unwinding across the FFI boundary (which is undefined behavior in the C ABI).
 - **Thread-Local Error Reporting**: Any error generates a detailed message retrievable through `poppy_last_error(buffer, size)`.
 - **Null Safety**: Every pointer parameter is validated before dereference.
 
@@ -226,7 +224,7 @@ Poppy exports a stable, thread-safe, and panic-safe C ABI defined in `include/po
 
 | Function | Description |
 |---|---|
-| `poppy_version()` | Returns `"0.6.0"` semver string. |
+| `poppy_version()` | Returns library semver string (e.g. `"0.6.1"`). |
 | `poppy_open(path, &stream)` | Opens container and prepares hardware decoder. |
 | `poppy_close(stream)` | Deallocates open media stream and releases GPU contexts. |
 | `poppy_get_stream_count(stream, &count)` | Returns number of media tracks in container. |

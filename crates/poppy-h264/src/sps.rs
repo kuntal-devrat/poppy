@@ -13,8 +13,8 @@ pub struct FrameCropping {
     pub bottom: u32,
 }
 
-/// VUI parameters (ITU-T H.264 Annex E). Previously ignored; now parsed for
-/// aspect ratio, timing (fps), and colour description needed by render/HDR.
+/// VUI parameters (ITU-T H.264 Annex E).
+/// Parsed for aspect ratio, timing (fps), and colour description needed by render/HDR.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct VuiParameters {
     pub aspect_ratio_info_present: bool,
@@ -194,7 +194,7 @@ impl Sps {
             offset_for_non_ref_pic = r.read_se()?;
             offset_for_top_to_bottom_field = r.read_se()?;
             let n = r.read_ue()?;
-            // Cap to prevent OOM on malicious ue==4G (previously unbounded loop).
+            // Cap to prevent memory exhaustion on malformed bitstreams.
             if n > 255 {
                 return Err(BitstreamError::InvalidSyntax(format!(
                     "num_ref_frames_in_pic_order_cnt_cycle {n} exceeds 255"

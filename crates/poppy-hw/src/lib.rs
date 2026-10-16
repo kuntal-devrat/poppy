@@ -242,13 +242,12 @@ pub trait HwDecoder: Send {
     }
 }
 
-/// Cross-platform factory that automatically instantiates the native hardware decoder for the host OS.
+/// Cross-platform factory that instantiates the native hardware decoder for the host OS.
 ///
-/// On Linux this returns a real VA-API decoder. On Windows/macOS the native
-/// COM/VideoToolbox backends are not yet implemented, so this returns
-/// `HwError::NoDeviceFound` with an explanatory message. Callers must handle
-/// this as “no hardware accelerator” (CPU fallback or explicit error), not as
-/// success with fake frames.
+/// - **Linux**: Returns a VA-API hardware decoder (`libva.so.2`).
+/// - **Windows**: Returns a Direct3D 12 Video decoder (`d3d12.dll`), or `HwError::NoDeviceFound` if unavailable.
+/// - **macOS**: Returns a VideoToolbox hardware decoder, or `HwError::NoDeviceFound` if unavailable.
+/// - Other platforms: Returns `HwError::NoDeviceFound`.
 pub fn create_decoder(codec_id: CodecId) -> Result<Box<dyn HwDecoder>, HwError> {
     #[cfg(target_os = "linux")]
     {

@@ -36,6 +36,13 @@ pub struct SymphoniaAudioDecoder {
 
 impl SymphoniaAudioDecoder {
     pub fn new(codec: CodecId, config: &AudioConfig) -> Result<Self, AudioError> {
+        if config.sample_rate == 0 {
+            return Err(AudioError::InitFailed("sample_rate is 0".into()));
+        }
+        if config.channels == 0 {
+            return Err(AudioError::InitFailed("channels is 0".into()));
+        }
+
         let symphonia_codec = match codec {
             CodecId::Aac => CODEC_TYPE_AAC,
             CodecId::Mp3 => CODEC_TYPE_MP3,
@@ -46,47 +53,43 @@ impl SymphoniaAudioDecoder {
 
         let mut params = CodecParameters::new();
         params.for_codec(symphonia_codec);
+        params.with_sample_rate(config.sample_rate);
 
-        if config.sample_rate > 0 {
-            params.with_sample_rate(config.sample_rate);
-        }
-        if config.channels > 0 {
-            // Map channel count to speaker layout explicitly; the previous
-            // `(1<<n)-1` bitmask hack was wrong for 5.1/7.1.
-            let ch = match config.channels {
-                1 => symphonia::core::audio::Channels::FRONT_CENTRE,
-                2 => {
-                    symphonia::core::audio::Channels::FRONT_LEFT
-                        | symphonia::core::audio::Channels::FRONT_RIGHT
-                }
-                6 => {
-                    symphonia::core::audio::Channels::FRONT_LEFT
-                        | symphonia::core::audio::Channels::FRONT_RIGHT
-                        | symphonia::core::audio::Channels::FRONT_CENTRE
-                        | symphonia::core::audio::Channels::LFE1
-                        | symphonia::core::audio::Channels::REAR_LEFT
-                        | symphonia::core::audio::Channels::REAR_RIGHT
-                }
-                8 => {
-                    symphonia::core::audio::Channels::FRONT_LEFT
-                        | symphonia::core::audio::Channels::FRONT_RIGHT
-                        | symphonia::core::audio::Channels::FRONT_CENTRE
-                        | symphonia::core::audio::Channels::LFE1
-                        | symphonia::core::audio::Channels::REAR_LEFT
-                        | symphonia::core::audio::Channels::REAR_RIGHT
-                        | symphonia::core::audio::Channels::SIDE_LEFT
-                        | symphonia::core::audio::Channels::SIDE_RIGHT
-                }
-                _ => {
-                    symphonia::core::audio::Channels::FRONT_LEFT
-                        | symphonia::core::audio::Channels::FRONT_RIGHT
-                }
-            };
-            // Only set for 1/2/6/8ch; otherwise leave unset and let Symphonia infer.
-            if matches!(config.channels, 1 | 2 | 6 | 8) {
-                params.with_channels(ch);
+        // Map standard channel counts to corresponding speaker layouts
+        let ch = match config.channels {
+            1 => symphonia::core::audio::Channels::FRONT_CENTRE,
+            2 => {
+                symphonia::core::audio::Channels::FRONT_LEFT
+                    | symphonia::core::audio::Channels::FRONT_RIGHT
             }
+            6 => {
+                symphonia::core::audio::Channels::FRONT_LEFT
+                    | symphonia::core::audio::Channels::FRONT_RIGHT
+                    | symphonia::core::audio::Channels::FRONT_CENTRE
+                    | symphonia::core::audio::Channels::LFE1
+                    | symphonia::core::audio::Channels::REAR_LEFT
+                    | symphonia::core::audio::Channels::REAR_RIGHT
+            }
+            8 => {
+                symphonia::core::audio::Channels::FRONT_LEFT
+                    | symphonia::core::audio::Channels::FRONT_RIGHT
+                    | symphonia::core::audio::Channels::FRONT_CENTRE
+                    | symphonia::core::audio::Channels::LFE1
+                    | symphonia::core::audio::Channels::REAR_LEFT
+                    | symphonia::core::audio::Channels::REAR_RIGHT
+                    | symphonia::core::audio::Channels::SIDE_LEFT
+                    | symphonia::core::audio::Channels::SIDE_RIGHT
+            }
+            _ => {
+                symphonia::core::audio::Channels::FRONT_LEFT
+                    | symphonia::core::audio::Channels::FRONT_RIGHT
+            }
+        };
+        // Only set for 1/2/6/8ch; otherwise leave unset and let Symphonia infer.
+        if matches!(config.channels, 1 | 2 | 6 | 8) {
+            params.with_channels(ch);
         }
+
         if let Some(extra) = &config.extradata {
             params.with_extra_data(extra.to_vec().into_boxed_slice());
         }
@@ -96,12 +99,6 @@ impl SymphoniaAudioDecoder {
             .make(&params, &DecoderOptions::default())
             .map_err(|e| AudioError::InitFailed(e.to_string()))?;
 
-        if config.sample_rate == 0 {
-            return Err(AudioError::InitFailed("sample_rate is 0".into()));
-        }
-        if config.channels == 0 {
-            return Err(AudioError::InitFailed("channels is 0".into()));
-        }
         let channels = config.channels;
         let sample_rate = config.sample_rate;
         let channel_layout = ChannelLayout::from_channels(channels);

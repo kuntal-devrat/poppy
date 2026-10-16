@@ -12,8 +12,8 @@ mod player;
 #[derive(Parser, Debug)]
 #[command(
     name = "poppy",
-    version = "0.6.0",
-    about = "🌸 Poppy — Modern media pipeline inspector, zero-copy GPU decoder, and wgpu player"
+    version,
+    about = "Poppy — Media pipeline inspector, zero-copy GPU decoder, and player"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -74,7 +74,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match cli.command {
         Commands::Probe { file } => {
-            println!("🔍 Probing: {}", file.display());
+            println!("Probing: {}", file.display());
             let ext = file
                 .extension()
                 .and_then(|e| e.to_str())
@@ -86,12 +86,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let demuxer = poppy_demux::MatroskaDemuxer::open(&file)?;
                 let streams = demuxer.streams();
                 println!(
-                    "📦 Container: Matroska / WebM ({} stream(s) found)\n",
+                    "Container: Matroska / WebM ({} stream(s) found)\n",
                     streams.len()
                 );
 
                 for stream in streams {
-                    println!("▶ Stream #{}:", stream.index);
+                    println!("Stream #{}:", stream.index);
                     println!("  Codec:      {}", stream.codec);
                     println!("  Timebase:   {}", stream.time_base);
                     match &stream.config {
@@ -174,7 +174,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let tracks = demuxer.tracks();
 
             println!(
-                "📦 Container: ISOBMFF / MP4 ({} stream(s) found)\n",
+                "Container: ISOBMFF / MP4 ({} stream(s) found)\n",
                 streams.len()
             );
 
@@ -193,7 +193,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .filter(|s| s.is_keyframe)
                     .count();
 
-                println!("▶ Stream #{}:", stream.index);
+                println!("Stream #{}:", stream.index);
                 println!("  Handler:    {}", handler.trim());
                 println!("  Codec:      {}", stream.codec);
                 if track.width > 0 && track.height > 0 {
@@ -322,7 +322,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let stream_config = demuxer.streams()[target_stream_idx].config.clone();
 
             println!(
-                "📥 Extracting Stream #{} ({}) from {}",
+                "Extracting Stream #{} ({}) from {}",
                 target_stream_idx,
                 stream_codec,
                 input.display()
@@ -423,7 +423,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             println!(
-                "✨ Wrote {} packets ({} bytes / {:.2} MB) to {}",
+                "Wrote {} packets ({} bytes / {:.2} MB) to {}",
                 packet_count,
                 total_bytes,
                 total_bytes as f64 / (1024.0 * 1024.0),
@@ -438,11 +438,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } => {
             let backend_name = if cfg!(target_os = "linux") {
                 "Linux VA-API (DRM PRIME Zero-Copy)"
+            } else if cfg!(target_os = "windows") {
+                "Windows Direct3D 12 Video"
+            } else if cfg!(target_os = "macos") {
+                "macOS VideoToolbox"
             } else {
-                "No native HW backend on this OS (D3D12/VideoToolbox not yet implemented; demux-only)"
+                "Generic (demux-only)"
             };
             println!(
-                "🚀 Initializing hardware decoding pipeline [{}] for: {}",
+                "Initializing hardware decoding pipeline [{}] for: {}",
                 backend_name,
                 file.display()
             );
@@ -453,13 +457,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Ok(r) => {
                         let info = r.adapter.get_info();
                         println!(
-                            "🎨 wgpu Zero-Copy Renderer: Active ({:?}, {})",
+                            "wgpu zero-copy renderer active: {:?}, {}",
                             info.backend, info.name
                         );
                         Some(r)
                     }
                     Err(e) => {
-                        println!("⚠️ wgpu renderer initialization skipped: {e}");
+                        eprintln!("Warning: wgpu renderer initialization skipped: {e}");
                         None
                     }
                 }

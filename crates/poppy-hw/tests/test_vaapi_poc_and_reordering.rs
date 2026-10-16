@@ -4,16 +4,27 @@ use poppy_core::codec::CodecConfig;
 use poppy_demux::bsf::avcc_to_annex_b;
 use poppy_demux::{Demuxer, Mp4Demuxer};
 use poppy_hw::{HwDecoder, VaapiH264Decoder};
-use std::path::Path;
 
 #[test]
 fn test_hw_decode_verify_monotonic_pts() {
-    let path = Path::new(
-        "/home/pikasu/Downloads/𝗠𝗢𝗡𝗧𝗔𝗚𝗘𝗠 𝗨𝗥𝗔𝗡𝗜𝗨𝗠 (𝗦𝗨𝗣𝗘𝗥 𝗦𝗟𝗢𝗪𝗘𝗗) - weekkse (1080p, h264).mp4",
-    );
-    if !path.exists() {
-        return;
-    }
+    let path = std::env::var("POPPY_TEST_VIDEO")
+        .map(std::path::PathBuf::from)
+        .ok()
+        .filter(|p| p.exists())
+        .or_else(|| {
+            let candidates = [
+                "tests/samples/test_h264.mp4",
+                "../../tests/samples/test_h264.mp4",
+            ];
+            candidates
+                .iter()
+                .map(std::path::PathBuf::from)
+                .find(|p| p.exists())
+        });
+    let path = match path {
+        Some(p) => p,
+        None => return,
+    };
 
     let mut demuxer = match Mp4Demuxer::open(path) {
         Ok(d) => d,

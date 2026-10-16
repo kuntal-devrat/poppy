@@ -15,7 +15,7 @@ pub enum Vp9FrameType {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Vp9SegmentFeature {
     pub alt_q_enabled: bool,
-    /// Alt-Q offset in the range -255..=255 (needs i16; previously i8 truncated 255 to -1).
+    /// Alt-Q offset in the range -255..=255.
     pub alt_q_val: i16,
 
     pub alt_lf_enabled: bool,
@@ -330,12 +330,8 @@ impl Vp9FrameHeader {
                     ref_frame_sign_bias[i] = r.read_bit()?;
                 }
 
-                // Dimensions with refs: per VP9 spec §6.2, when found_ref==1
-                // no explicit dimensions are sent — they are inherited from
-                // the referenced frame. Previously fell through to
-                // read_bits(16) consuming render-flag bits as width.
-                // Now requires valid ref_dims; otherwise returns error instead
-                // of mis-parsing.
+                // Dimensions with refs: per VP9 spec §6.2, when found_ref == 1,
+                // explicit dimensions are inherited from the referenced frame.
                 let mut found_ref = false;
                 let mut ref_w = 0;
                 let mut ref_h = 0;
