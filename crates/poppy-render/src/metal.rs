@@ -17,6 +17,12 @@ pub struct MetalZeroCopyTextures {
 }
 
 #[cfg(target_os = "macos")]
+use metal::foreign_types::ForeignType;
+#[cfg(target_os = "macos")]
+use objc::{msg_send, sel, sel_impl};
+
+#[allow(unexpected_cfgs)]
+#[cfg(target_os = "macos")]
 pub fn import_cv_pixel_buffer_zero_copy(
     device: &wgpu::Device,
     desc: &CvPixelBufferDescriptor,
@@ -67,39 +73,93 @@ pub fn import_cv_pixel_buffer_zero_copy(
                 }
             };
 
-            let raw_device = hal_device.raw_device();
+            let raw_device_guard = hal_device.raw_device().lock();
+            let raw_device: &metal::DeviceRef = &raw_device_guard;
 
-            let y_hal_desc = wgpu_hal::TextureDescriptor {
-                label: Some("poppy_metal_zero_copy_y_texture"),
-                size: wgpu::Extent3d {
-                    width: desc.width,
-                    height: desc.height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu_y_fmt,
-                usage: wgpu_hal::TextureUses::RESOURCE,
-                memory_flags: wgpu_hal::MemoryFlags::empty(),
-                view_formats: vec![],
+            let (mtl_y_fmt, mtl_uv_fmt) = match pixel_format {
+                PixelFormat::Nv12 => (
+                    metal::MTLPixelFormat::R8Unorm,
+                    metal::MTLPixelFormat::RG8Unorm,
+                ),
+                PixelFormat::P010 => (
+                    metal::MTLPixelFormat::R16Unorm,
+                    metal::MTLPixelFormat::RG16Unorm,
+                ),
+                _ => {
+                    return Err(RenderError::UnsupportedFormat(pixel_format.to_string()));
+                }
             };
 
-            let uv_hal_desc = wgpu_hal::TextureDescriptor {
-                label: Some("poppy_metal_zero_copy_uv_texture"),
-                size: wgpu::Extent3d {
-                    width: (desc.width / 2).max(1),
-                    height: (desc.height / 2).max(1),
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu_uv_fmt,
-                usage: wgpu_hal::TextureUses::RESOURCE,
-                memory_flags: wgpu_hal::MemoryFlags::empty(),
-                view_formats: vec![],
+            let y_desc = metal::TextureDescriptor::new();
+            y_desc.set_texture_type(metal::MTLTextureType::D2);
+            y_desc.set_pixel_format(mtl_y_fmt);
+            y_desc.set_width(desc.width as u64);
+            y_desc.set_height(desc.height as u64);
+            y_desc.set_usage(metal::MTLTextureUsage::ShaderRead);
+
+            let uv_desc = metal::TextureDescriptor::new();
+            uv_desc.set_texture_type(metal::MTLTextureType::D2);
+            uv_desc.set_pixel_format(mtl_uv_fmt);
+            uv_desc.set_width(((desc.width / 2).max(1)) as u64);
+            uv_desc.set_height(((desc.height / 2).max(1)) as u64);
+            uv_desc.set_usage(metal::MTLTextureUsage::ShaderRead);
+
+            // Call -[MTLDevice newTextureWithDescriptor:iosurface:plane:]
+            let y_raw: *mut objc::runtime::Object = msg_send![
+                raw_device,
+                newTextureWithDescriptor: &*y_desc
+                iosurface: iosurface_ptr
+                plane: 0usize
+            ];
+            if y_raw.is_null() {
+                return Err(RenderError::ImportFailed(
+                    "Metal failed to create texture from IOSurface plane 0".into(),
+                ));
+            }
+            let y_tex: metal::Texture = metal::Texture::from_ptr(y_raw as *mut _);
+
+            let uv_raw: *mut objc::runtime::Object = msg_send![
+                raw_device,
+                newTextureWithDescriptor: &*uv_desc
+                iosurface: iosurface_ptr
+                plane: 1usize
+            ];
+            if uv_raw.is_null() {
+                return Err(RenderError::ImportFailed(
+                    "Metal failed to create texture from IOSurface plane 1".into(),
+                ));
+            }
+            let uv_tex: metal::Texture = metal::Texture::from_ptr(uv_raw as *mut _);
+
+            let y_extent = wgpu_hal::CopyExtent {
+                width: desc.width,
+                height: desc.height,
+                depth: 1,
             };
+
+            let uv_extent = wgpu_hal::CopyExtent {
+                width: (desc.width / 2).max(1),
+                height: (desc.height / 2).max(1),
+                depth: 1,
+            };
+
+            let y_hal_tex = wgpu_hal::metal::Device::texture_from_raw(
+                y_tex,
+                wgpu_y_fmt,
+                metal::MTLTextureType::D2,
+                1,
+                1,
+                y_extent,
+            );
+
+            let uv_hal_tex = wgpu_hal::metal::Device::texture_from_raw(
+                uv_tex,
+                wgpu_uv_fmt,
+                metal::MTLTextureType::D2,
+                1,
+                1,
+                uv_extent,
+            );
 
             let y_wgpu_desc = wgpu::TextureDescriptor {
                 label: Some("poppy_metal_zero_copy_y_texture"),
@@ -131,17 +191,10 @@ pub fn import_cv_pixel_buffer_zero_copy(
                 view_formats: &[],
             };
 
-            // Call raw MTLDevice: newTextureWithDescriptor:iosurface:plane:
-            // plane 0 for Y, plane 1 for UV
-            let y_tex_raw =
-                wgpu_hal::metal::Device::texture_from_raw(raw_device.as_raw(), &y_hal_desc, None);
-            let uv_tex_raw =
-                wgpu_hal::metal::Device::texture_from_raw(raw_device.as_raw(), &uv_hal_desc, None);
-
             let y_texture =
-                device.create_texture_from_hal::<wgpu_hal::api::Metal>(y_tex_raw, &y_wgpu_desc);
+                device.create_texture_from_hal::<wgpu_hal::api::Metal>(y_hal_tex, &y_wgpu_desc);
             let uv_texture =
-                device.create_texture_from_hal::<wgpu_hal::api::Metal>(uv_tex_raw, &uv_wgpu_desc);
+                device.create_texture_from_hal::<wgpu_hal::api::Metal>(uv_hal_tex, &uv_wgpu_desc);
 
             Ok(MetalZeroCopyTextures {
                 y_texture,

@@ -105,26 +105,29 @@ impl D3D12SurfacePool {
                 flags: D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS,
             };
 
+            let mut surfaces = Vec::with_capacity(count);
+
             for _ in 0..count {
                 let id = SURFACE_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
                 let mut resource: *mut c_void = ptr::null_mut();
+                let mut shared_handle: HANDLE = ptr::null_mut();
 
-                // ID3D12Device::CreateCommittedResource (vtable index 27)
-                let vtable = *(device.device_ptr as *const *const *const c_void);
-                let create_committed_resource: unsafe extern "system" fn(
-                    this: *mut c_void,
-                    p_heap_properties: *const D3D12_HEAP_PROPERTIES,
-                    heap_flags: u32,
-                    p_desc: *const D3D12_RESOURCE_DESC,
-                    initial_resource_state: u32,
-                    p_optimized_clear_value: *const c_void,
-                    riid_resource: *const GUID,
-                    ppv_resource: *mut *mut c_void,
-                )
-                    -> HRESULT = std::mem::transmute(*vtable.add(27));
+                unsafe {
+                    // ID3D12Device::CreateCommittedResource (vtable index 27)
+                    let vtable = *(device.device_ptr as *const *const *const c_void);
+                    let create_committed_resource: unsafe extern "system" fn(
+                        this: *mut c_void,
+                        p_heap_properties: *const D3D12_HEAP_PROPERTIES,
+                        heap_flags: u32,
+                        p_desc: *const D3D12_RESOURCE_DESC,
+                        initial_resource_state: u32,
+                        p_optimized_clear_value: *const c_void,
+                        riid_resource: *const GUID,
+                        ppv_resource: *mut *mut c_void,
+                    )
+                        -> HRESULT = std::mem::transmute(*vtable.add(27));
 
-                let hr = unsafe {
-                    create_committed_resource(
+                    let hr = create_committed_resource(
                         device.device_ptr,
                         &heap_props,
                         0,
@@ -133,48 +136,44 @@ impl D3D12SurfacePool {
                         ptr::null(),
                         &IID_ID3D12RESOURCE,
                         &mut resource,
+                    );
+
+                    if hr != S_OK || resource.is_null() {
+                        return Err(HwError::SurfaceAllocationFailed(format!(
+                            "ID3D12Device::CreateCommittedResource failed with HRESULT {hr:#x}"
+                        )));
+                    }
+
+                    // ID3D12Device::CreateSharedHandle (vtable index 30)
+                    let create_shared_handle: unsafe extern "system" fn(
+                        this: *mut c_void,
+                        p_resource: *mut c_void,
+                        p_security_attributes: *const c_void,
+                        access: u32,
+                        name: *const u16,
+                        p_handle: *mut HANDLE,
                     )
-                };
+                        -> HRESULT = std::mem::transmute(*vtable.add(30));
 
-                if hr != S_OK || resource.is_null() {
-                    return Err(HwError::SurfaceAllocationFailed(format!(
-                        "ID3D12Device::CreateCommittedResource failed with HRESULT {hr:#x}"
-                    )));
-                }
-
-                // ID3D12Device::CreateSharedHandle (vtable index 30)
-                let mut shared_handle: HANDLE = ptr::null_mut();
-                let create_shared_handle: unsafe extern "system" fn(
-                    this: *mut c_void,
-                    p_resource: *mut c_void,
-                    p_security_attributes: *const c_void,
-                    access: u32,
-                    name: *const u16,
-                    p_handle: *mut HANDLE,
-                ) -> HRESULT = std::mem::transmute(*vtable.add(30));
-
-                const GENERIC_ALL: u32 = 0x10000000;
-                let hr_handle = unsafe {
-                    create_shared_handle(
+                    const GENERIC_ALL: u32 = 0x10000000;
+                    let hr_handle = create_shared_handle(
                         device.device_ptr,
                         resource,
                         ptr::null(),
                         GENERIC_ALL,
                         ptr::null(),
                         &mut shared_handle,
-                    )
-                };
+                    );
 
-                if hr_handle != S_OK || shared_handle.is_null() {
-                    let res_vtable = *(resource as *const *const *const c_void);
-                    let release: unsafe extern "system" fn(this: *mut c_void) -> u32 =
-                        std::mem::transmute(*res_vtable.add(2));
-                    unsafe {
+                    if hr_handle != S_OK || shared_handle.is_null() {
+                        let res_vtable = *(resource as *const *const *const c_void);
+                        let release: unsafe extern "system" fn(this: *mut c_void) -> u32 =
+                            std::mem::transmute(*res_vtable.add(2));
                         release(resource);
+                        return Err(HwError::SurfaceAllocationFailed(format!(
+                            "ID3D12Device::CreateSharedHandle failed with HRESULT {hr_handle:#x}"
+                        )));
                     }
-                    return Err(HwError::SurfaceAllocationFailed(format!(
-                        "ID3D12Device::CreateSharedHandle failed with HRESULT {hr_handle:#x}"
-                    )));
                 }
 
                 surfaces.push(D3D12Surface {

@@ -483,7 +483,10 @@ impl D3d12Functions {
         // We declare them as extern "system" to call the real Win32 APIs.
         unsafe extern "system" {
             fn LoadLibraryW(lp_lib_file_name: *const u16) -> HMODULE;
-            fn GetProcAddress(h_module: HMODULE, lp_proc_name: *const u8) -> *mut c_void;
+            fn GetProcAddress(
+                h_module: HMODULE,
+                lp_proc_name: *const std::ffi::c_char,
+            ) -> *mut c_void;
         }
 
         fn to_wide(s: &str) -> Vec<u16> {
@@ -491,7 +494,7 @@ impl D3d12Functions {
         }
 
         unsafe fn sym(handle: HMODULE, name: &[u8]) -> *mut c_void {
-            unsafe { GetProcAddress(handle, name.as_ptr()) }
+            unsafe { GetProcAddress(handle, name.as_ptr() as *const std::ffi::c_char) }
         }
 
         let d3d12_dll = to_wide("d3d12.dll");
