@@ -28,9 +28,10 @@ pub fn import_cv_pixel_buffer_zero_copy(
     desc: &CvPixelBufferDescriptor,
     pixel_format: PixelFormat,
 ) -> Result<MetalZeroCopyTextures, RenderError> {
-    if desc.pixel_buffer_ptr == 0 && desc.io_surface_ptr == 0 {
+    let (pb_addr, io_addr) = (desc.pixel_buffer_ptr as usize, desc.io_surface_ptr as usize);
+    if pb_addr < 0x10000 && io_addr < 0x10000 {
         return Err(RenderError::ImportFailed(
-            "Invalid CVPixelBuffer or IOSurface pointer (NULL)".into(),
+            "Invalid CVPixelBuffer or IOSurface pointer (NULL or unmapped memory address)".into(),
         ));
     }
 
@@ -42,9 +43,9 @@ pub fn import_cv_pixel_buffer_zero_copy(
         _ => (wgpu::TextureFormat::R8Unorm, wgpu::TextureFormat::Rg8Unorm),
     };
 
-    let iosurface_ptr = if desc.io_surface_ptr != 0 {
+    let iosurface_ptr = if io_addr >= 0x10000 {
         desc.io_surface_ptr as *mut std::ffi::c_void
-    } else {
+    } else if pb_addr >= 0x10000 {
         // Resolve IOSurfaceRef from CVPixelBufferRef using CVPixelBufferGetIOSurface
         #[link(name = "CoreVideo", kind = "framework")]
         unsafe extern "C" {
@@ -54,13 +55,23 @@ pub fn import_cv_pixel_buffer_zero_copy(
         }
         let ptr =
             unsafe { CVPixelBufferGetIOSurface(desc.pixel_buffer_ptr as *mut std::ffi::c_void) };
-        if ptr.is_null() {
+        if (ptr as usize) < 0x10000 {
             return Err(RenderError::ImportFailed(
                 "CVPixelBuffer is not backed by an IOSurface".into(),
             ));
         }
         ptr
+    } else {
+        return Err(RenderError::ImportFailed(
+            "Invalid CVPixelBuffer and IOSurface pointer".into(),
+        ));
     };
+
+    if (iosurface_ptr as usize) < 0x10000 {
+        return Err(RenderError::ImportFailed(
+            "Resolved IOSurface pointer is invalid".into(),
+        ));
+    }
 
     unsafe {
         device.as_hal::<wgpu_hal::api::Metal, _, _>(|hal_device| {
