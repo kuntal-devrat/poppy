@@ -9,7 +9,7 @@ fn test_c_abi_version() {
     let ver_ptr = poppy_version();
     assert!(!ver_ptr.is_null());
     let ver = unsafe { CStr::from_ptr(ver_ptr) }.to_str().unwrap();
-    assert_eq!(ver, "0.6.0");
+    assert_eq!(ver, env!("CARGO_PKG_VERSION"));
 }
 
 #[test]

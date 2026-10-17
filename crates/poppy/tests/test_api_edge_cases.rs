@@ -283,3 +283,144 @@ fn test_multi_video_track_selection_pipeline() {
 
     let _ = std::fs::remove_file(&mp4_path);
 }
+
+fn build_synthetic_audio_trak(track_id: u32, enabled: bool) -> Vec<u8> {
+    let mut mp4a_payload = vec![0u8; 28];
+    mp4a_payload[16..18].copy_from_slice(&2u16.to_be_bytes());
+    mp4a_payload[18..20].copy_from_slice(&16u16.to_be_bytes());
+    mp4a_payload[24..28].copy_from_slice(&(48000u32 << 16).to_be_bytes());
+    let mp4a_box = make_box(b"mp4a", &mp4a_payload);
+
+    let mut stsd_payload = Vec::new();
+    stsd_payload.extend_from_slice(&1u32.to_be_bytes());
+    stsd_payload.extend_from_slice(&mp4a_box);
+    let stsd_box = make_fullbox(b"stsd", 0, [0, 0, 0], &stsd_payload);
+
+    let stsz_box = make_fullbox(b"stsz", 0, [0, 0, 0], &[0; 8]);
+    let stsc_box = make_fullbox(b"stsc", 0, [0, 0, 0], &[0; 4]);
+    let stco_box = make_fullbox(b"stco", 0, [0, 0, 0], &[0; 4]);
+    let stts_box = make_fullbox(b"stts", 0, [0, 0, 0], &[0; 4]);
+
+    let mut stbl_payload = Vec::new();
+    stbl_payload.extend_from_slice(&stsd_box);
+    stbl_payload.extend_from_slice(&stts_box);
+    stbl_payload.extend_from_slice(&stsc_box);
+    stbl_payload.extend_from_slice(&stsz_box);
+    stbl_payload.extend_from_slice(&stco_box);
+    let stbl_box = make_box(b"stbl", &stbl_payload);
+
+    let minf_box = make_box(b"minf", &stbl_box);
+
+    let mut hdlr_payload = vec![0u8; 16];
+    hdlr_payload[4..8].copy_from_slice(b"soun");
+    let hdlr_box = make_fullbox(b"hdlr", 0, [0, 0, 0], &hdlr_payload);
+
+    let mut mdhd_payload = vec![0u8; 20];
+    mdhd_payload[8..12].copy_from_slice(&48000u32.to_be_bytes());
+    mdhd_payload[12..16].copy_from_slice(&48000u32.to_be_bytes());
+    let mdhd_box = make_fullbox(b"mdhd", 0, [0, 0, 0], &mdhd_payload);
+
+    let mut mdia_payload = Vec::new();
+    mdia_payload.extend_from_slice(&mdhd_box);
+    mdia_payload.extend_from_slice(&hdlr_box);
+    mdia_payload.extend_from_slice(&minf_box);
+    let mdia_box = make_box(b"mdia", &mdia_payload);
+
+    let flag_byte = if enabled { 0x01 } else { 0x00 };
+    let mut tkhd_payload = vec![0u8; 80];
+    tkhd_payload[8..12].copy_from_slice(&track_id.to_be_bytes());
+    tkhd_payload[16..20].copy_from_slice(&48000u32.to_be_bytes());
+    let tkhd_box = make_fullbox(b"tkhd", 0, [0, 0, flag_byte], &tkhd_payload);
+
+    let mut trak_payload = Vec::new();
+    trak_payload.extend_from_slice(&tkhd_box);
+    trak_payload.extend_from_slice(&mdia_box);
+    make_box(b"trak", &trak_payload)
+}
+
+#[test]
+fn test_multi_audio_track_selection_and_override() {
+    let temp_dir = std::env::temp_dir();
+    let mp4_path = temp_dir.join("poppy_test_multi_audio_track.mp4");
+
+    let ftyp = make_box(b"ftyp", b"isom\0\0\x02\0isomiso2mp41");
+    // Track 1: Video (enabled)
+    let trak_video = build_synthetic_trak(1, true, 1920, 1080, &[], 0);
+    // Track 2: Audio (disabled)
+    let trak_audio_disabled = build_synthetic_audio_trak(2, false);
+    // Track 3: Audio (enabled)
+    let trak_audio_enabled = build_synthetic_audio_trak(3, true);
+
+    let mut moov_payload = Vec::new();
+    moov_payload.extend_from_slice(&trak_video);
+    moov_payload.extend_from_slice(&trak_audio_disabled);
+    moov_payload.extend_from_slice(&trak_audio_enabled);
+    let moov = make_box(b"moov", &moov_payload);
+    let mdat = make_box(b"mdat", &[]);
+
+    let mut file_data = Vec::new();
+    file_data.extend_from_slice(&ftyp);
+    file_data.extend_from_slice(&moov);
+    file_data.extend_from_slice(&mdat);
+
+    std::fs::write(&mp4_path, &file_data).expect("write synthetic multi-audio MP4");
+
+    // 1. Default selection selects Track 3 (enabled audio, index 2) over Track 2 (disabled audio, index 1)
+    let stream_default = MediaStream::builder()
+        .hardware_acceleration(false)
+        .open_sync(&mp4_path)
+        .expect("open multi-audio MP4");
+
+    assert_eq!(
+        stream_default.audio_stream_index(),
+        Some(2),
+        "Default pipeline selection must choose enabled audio track (index 2)"
+    );
+
+    // 2. Explicit audio track selection override selects Track 2 (disabled audio, index 1)
+    let stream_override = MediaStream::builder()
+        .hardware_acceleration(false)
+        .audio_stream_index(1)
+        .open_sync(&mp4_path)
+        .expect("open multi-audio MP4 with audio_stream_index(1)");
+
+    assert_eq!(
+        stream_override.audio_stream_index(),
+        Some(1),
+        "Explicit builder audio_stream_index selection must choose track index 1"
+    );
+
+    // 3. Selecting a non-audio track as audio_stream_index returns UnsupportedCodec
+    let err_video = match MediaStream::builder()
+        .hardware_acceleration(false)
+        .audio_stream_index(0)
+        .open_sync(&mp4_path)
+    {
+        Ok(_) => panic!("audio_stream_index(0) pointing to video must error"),
+        Err(e) => e,
+    };
+
+    match err_video {
+        PoppyError::Audio(poppy_audio::AudioError::UnsupportedCodec(c)) => {
+            assert_eq!(c, poppy::core::CodecId::H264);
+        }
+        other => panic!("Expected AudioError::UnsupportedCodec, got {other:?}"),
+    }
+
+    // 4. Out of range audio_stream_index returns Demux error
+    let err_oor = match MediaStream::builder()
+        .hardware_acceleration(false)
+        .audio_stream_index(99)
+        .open_sync(&mp4_path)
+    {
+        Ok(_) => panic!("out of range audio_stream_index must error"),
+        Err(e) => e,
+    };
+
+    match err_oor {
+        PoppyError::Demux(_) => {}
+        other => panic!("Expected Demux error, got {other:?}"),
+    }
+
+    let _ = std::fs::remove_file(&mp4_path);
+}

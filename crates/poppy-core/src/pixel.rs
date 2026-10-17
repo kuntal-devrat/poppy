@@ -51,8 +51,7 @@ impl PixelFormat {
             PixelFormat::Nv12 | PixelFormat::P010 | PixelFormat::Yuv420p => {
                 Some(ChromaSubsampling::Yuv420)
             }
-            // RGBA has no chroma subsampling; previously returned Yuv444
-            // which was misleading.
+            // RGBA formats do not use chroma subsampling.
             PixelFormat::Rgba32 => None,
         }
     }

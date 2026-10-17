@@ -9,8 +9,10 @@ use crate::{DxgiSharedHandle, HwError};
 use poppy_core::CodecId;
 use std::ffi::c_void;
 use std::ptr;
+#[cfg(target_os = "windows")]
 use std::sync::atomic::{AtomicU32, Ordering};
 
+#[cfg(target_os = "windows")]
 static SURFACE_ID_COUNTER: AtomicU32 = AtomicU32::new(100);
 
 /// Allocated Direct3D 12 hardware decode surface (Texture2D).
@@ -30,6 +32,20 @@ pub struct D3D12Surface {
 // SAFETY: D3D12 resources are inherently thread-safe through the COM refcount.
 unsafe impl Send for D3D12Surface {}
 unsafe impl Sync for D3D12Surface {}
+
+impl Drop for D3D12Surface {
+    fn drop(&mut self) {
+        if !self.resource.is_null() {
+            unsafe {
+                let vtable = *(self.resource as *const *const *const c_void);
+                let release: unsafe extern "system" fn(this: *mut c_void) -> u32 =
+                    std::mem::transmute(*vtable.add(2));
+                release(self.resource);
+                self.resource = ptr::null_mut();
+            }
+        }
+    }
+}
 
 /// Pool of Direct3D 12 video decoding surfaces.
 pub struct D3D12SurfacePool {
@@ -59,46 +75,132 @@ impl D3D12SurfacePool {
             DXGI_FORMAT_NV12
         };
 
-        let mut surfaces = Vec::with_capacity(count);
-
-        for _ in 0..count {
-            let id = SURFACE_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
-
-            if !device.device_ptr.is_null() {
-                // Real D3D12 device path: create committed Texture2D resources
-                // via the ID3D12Device COM interface. The vtable call goes
-                // through the raw function pointer loaded at device open time.
-                //
-                // For now we create placeholder surfaces; real COM vtable calls
-                // will be wired once we have the full ID3D12Device vtable.
-                let mock_handle = (id as isize) * 0x1000 + 0x4;
-                surfaces.push(D3D12Surface {
-                    id,
-                    width,
-                    height,
-                    format,
-                    resource: ptr::null_mut(),
-                    shared_handle: mock_handle,
-                });
-            } else {
-                let mock_handle = (id as isize) * 0x1000 + 0x4;
-                surfaces.push(D3D12Surface {
-                    id,
-                    width,
-                    height,
-                    format,
-                    resource: ptr::null_mut(),
-                    shared_handle: mock_handle,
-                });
-            }
+        if device.device_ptr.is_null() {
+            return Err(HwError::SurfaceAllocationFailed(
+                "Direct3D 12 device is not initialized (device pointer is null)".into(),
+            ));
         }
 
-        Ok(Self {
-            width,
-            height,
-            format,
-            surfaces,
-        })
+        #[cfg(target_os = "windows")]
+        {
+            let heap_props = D3D12_HEAP_PROPERTIES {
+                heap_type: D3D12_HEAP_TYPE_DEFAULT,
+                cpu_page_property: 0,
+                memory_pool_preference: 0,
+                creation_node_mask: 1,
+                visible_node_mask: 1,
+            };
+
+            let res_desc = D3D12_RESOURCE_DESC {
+                dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+                alignment: 0,
+                width: width as u64,
+                height,
+                depth_or_array_size: 1,
+                mip_levels: 1,
+                format,
+                sample_count: 1,
+                sample_quality: 0,
+                layout: D3D12_TEXTURE_LAYOUT_UNKNOWN,
+                flags: D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS,
+            };
+
+            let mut surfaces = Vec::with_capacity(count);
+
+            for _ in 0..count {
+                let id = SURFACE_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+                let mut resource: *mut c_void = ptr::null_mut();
+                let mut shared_handle: HANDLE = ptr::null_mut();
+
+                unsafe {
+                    // ID3D12Device::CreateCommittedResource (vtable index 27)
+                    let vtable = *(device.device_ptr as *const *const *const c_void);
+                    let create_committed_resource: unsafe extern "system" fn(
+                        this: *mut c_void,
+                        p_heap_properties: *const D3D12_HEAP_PROPERTIES,
+                        heap_flags: u32,
+                        p_desc: *const D3D12_RESOURCE_DESC,
+                        initial_resource_state: u32,
+                        p_optimized_clear_value: *const c_void,
+                        riid_resource: *const GUID,
+                        ppv_resource: *mut *mut c_void,
+                    )
+                        -> HRESULT = std::mem::transmute(*vtable.add(27));
+
+                    let hr = create_committed_resource(
+                        device.device_ptr,
+                        &heap_props,
+                        0,
+                        &res_desc,
+                        D3D12_RESOURCE_STATE_COMMON,
+                        ptr::null(),
+                        &IID_ID3D12RESOURCE,
+                        &mut resource,
+                    );
+
+                    if hr != S_OK || resource.is_null() {
+                        return Err(HwError::SurfaceAllocationFailed(format!(
+                            "ID3D12Device::CreateCommittedResource failed with HRESULT {hr:#x}"
+                        )));
+                    }
+
+                    // ID3D12Device::CreateSharedHandle (vtable index 30)
+                    let create_shared_handle: unsafe extern "system" fn(
+                        this: *mut c_void,
+                        p_resource: *mut c_void,
+                        p_security_attributes: *const c_void,
+                        access: u32,
+                        name: *const u16,
+                        p_handle: *mut HANDLE,
+                    )
+                        -> HRESULT = std::mem::transmute(*vtable.add(30));
+
+                    const GENERIC_ALL: u32 = 0x10000000;
+                    let hr_handle = create_shared_handle(
+                        device.device_ptr,
+                        resource,
+                        ptr::null(),
+                        GENERIC_ALL,
+                        ptr::null(),
+                        &mut shared_handle,
+                    );
+
+                    if hr_handle != S_OK || shared_handle.is_null() {
+                        let res_vtable = *(resource as *const *const *const c_void);
+                        let release: unsafe extern "system" fn(this: *mut c_void) -> u32 =
+                            std::mem::transmute(*res_vtable.add(2));
+                        release(resource);
+                        return Err(HwError::SurfaceAllocationFailed(format!(
+                            "ID3D12Device::CreateSharedHandle failed with HRESULT {hr_handle:#x}"
+                        )));
+                    }
+                }
+
+                surfaces.push(D3D12Surface {
+                    id,
+                    width,
+                    height,
+                    format,
+                    resource,
+                    shared_handle: shared_handle as isize,
+                });
+            }
+
+            Ok(Self {
+                width,
+                height,
+                format,
+                surfaces,
+            })
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = (width, height, format, count);
+            Err(HwError::SurfaceAllocationFailed(
+                "Direct3D 12 surface allocation is only supported on Windows".into(),
+            ))
+        }
     }
 
     /// Export a zero-copy DXGI shared handle for the given surface.

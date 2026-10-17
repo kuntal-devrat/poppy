@@ -120,21 +120,57 @@ impl MediaStream {
         let codec = stream_info.codec;
         let config = stream_info.config.clone();
 
+        // Select audio track: either user-specified or best candidate prioritizing enabled tracks
         let mut audio_stream_index = None;
         let mut audio_config = None;
         let mut audio_decoder = None;
 
-        for (i, s) in demuxer.streams().iter().enumerate() {
-            if matches!(
+        let selected_audio_idx = if let Some(idx) = builder.audio_stream_index {
+            if idx >= demuxer.streams().len() {
+                return Err(PoppyError::Demux(
+                    poppy_demux::DemuxError::SampleOutOfRange {
+                        index: idx as u32,
+                        total: demuxer.streams().len() as u32,
+                    },
+                ));
+            }
+            let s = &demuxer.streams()[idx];
+            if !matches!(
                 s.codec,
                 CodecId::Aac | CodecId::Opus | CodecId::Mp3 | CodecId::Flac | CodecId::Vorbis
             ) {
-                audio_stream_index = Some(i);
-                if let CodecConfig::Audio(cfg) = &s.config {
-                    audio_config = Some(cfg.clone());
-                    audio_decoder = poppy_audio::create_audio_decoder(s.codec, cfg).ok();
-                }
-                break;
+                return Err(poppy_audio::AudioError::UnsupportedCodec(s.codec).into());
+            }
+            Some(idx)
+        } else {
+            let audio_candidates: Vec<(usize, &StreamInfo)> = demuxer
+                .streams()
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| {
+                    matches!(
+                        s.codec,
+                        CodecId::Aac
+                            | CodecId::Opus
+                            | CodecId::Mp3
+                            | CodecId::Flac
+                            | CodecId::Vorbis
+                    )
+                })
+                .collect();
+
+            audio_candidates
+                .into_iter()
+                .max_by_key(|&(i, s)| (s.enabled, std::cmp::Reverse(i)))
+                .map(|(i, _)| i)
+        };
+
+        if let Some(i) = selected_audio_idx {
+            let s = &demuxer.streams()[i];
+            audio_stream_index = Some(i);
+            if let CodecConfig::Audio(cfg) = &s.config {
+                audio_config = Some(cfg.clone());
+                audio_decoder = poppy_audio::create_audio_decoder(s.codec, cfg).ok();
             }
         }
 

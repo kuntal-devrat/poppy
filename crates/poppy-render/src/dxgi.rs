@@ -28,25 +28,6 @@ pub fn import_dxgi_zero_copy(
         ));
     }
 
-    // Test handles (unit tests run on Linux CI too) get placeholder textures.
-    if desc.handle == 0x1234 || desc.handle < 0 {
-        return import_dxgi_mock(device, desc, pixel_format);
-    }
-
-    // Production path requires ID3D12Device::OpenSharedHandle + CreatePlacedResource
-    // via wgpu-hal Dx12 HAL, which is not yet exposed. Fail honestly so the
-    // caller falls back to the CPU data path instead of rendering black.
-    Err(RenderError::ImportFailed(
-        "DXGI OpenSharedHandle import not yet implemented; CPU fallback required".into(),
-    ))
-}
-
-#[cfg(target_os = "windows")]
-fn import_dxgi_mock(
-    device: &wgpu::Device,
-    desc: &DxgiSharedHandle,
-    pixel_format: PixelFormat,
-) -> Result<DxgiZeroCopyTextures, RenderError> {
     let (wgpu_y_fmt, wgpu_uv_fmt) = match pixel_format {
         PixelFormat::P010 => (
             wgpu::TextureFormat::R16Unorm,
@@ -55,108 +36,109 @@ fn import_dxgi_mock(
         _ => (wgpu::TextureFormat::R8Unorm, wgpu::TextureFormat::Rg8Unorm),
     };
 
-    let y_desc = wgpu::TextureDescriptor {
-        label: Some("poppy_dxgi_zero_copy_y_texture"),
-        size: wgpu::Extent3d {
-            width: desc.width,
-            height: desc.height,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu_y_fmt,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING,
-        view_formats: &[],
-    };
+    unsafe {
+        device.as_hal::<wgpu_hal::api::Dx12, _, _>(|hal_device| {
+            let hal_device = match hal_device {
+                Some(d) => d,
+                None => {
+                    return Err(RenderError::ImportFailed(
+                        "wgpu Device is not backed by DirectX 12 HAL".into(),
+                    ));
+                }
+            };
 
-    let uv_desc = wgpu::TextureDescriptor {
-        label: Some("poppy_dxgi_zero_copy_uv_texture"),
-        size: wgpu::Extent3d {
-            width: (desc.width / 2).max(1),
-            height: (desc.height / 2).max(1),
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu_uv_fmt,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING,
-        view_formats: &[],
-    };
+            let raw_device = hal_device.raw_device();
+            let nt_handle = windows::Win32::Foundation::HANDLE(desc.handle as *mut _);
 
-    let y_texture = device.create_texture(&y_desc);
-    let uv_texture = device.create_texture(&uv_desc);
+            let mut resource: Option<windows::Win32::Graphics::Direct3D12::ID3D12Resource> = None;
+            raw_device
+                .OpenSharedHandle(nt_handle, &mut resource)
+                .map_err(|e| {
+                    RenderError::ImportFailed(format!("ID3D12Device::OpenSharedHandle failed: {e}"))
+                })?;
 
-    Ok(DxgiZeroCopyTextures {
-        y_texture,
-        uv_texture,
-    })
+            let resource = resource.ok_or_else(|| {
+                RenderError::ImportFailed(
+                    "ID3D12Device::OpenSharedHandle returned null resource".into(),
+                )
+            })?;
+
+            let y_size = wgpu::Extent3d {
+                width: desc.width,
+                height: desc.height,
+                depth_or_array_layers: 1,
+            };
+
+            let uv_size = wgpu::Extent3d {
+                width: (desc.width / 2).max(1),
+                height: (desc.height / 2).max(1),
+                depth_or_array_layers: 1,
+            };
+
+            let y_wgpu_desc = wgpu::TextureDescriptor {
+                label: Some("poppy_dxgi_zero_copy_y_texture"),
+                size: y_size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu_y_fmt,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            };
+
+            let uv_wgpu_desc = wgpu::TextureDescriptor {
+                label: Some("poppy_dxgi_zero_copy_uv_texture"),
+                size: uv_size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu_uv_fmt,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            };
+
+            let y_hal_tex = wgpu_hal::dx12::Device::texture_from_raw(
+                resource.clone(),
+                wgpu_y_fmt,
+                wgpu::TextureDimension::D2,
+                y_size,
+                1,
+                1,
+            );
+
+            let uv_hal_tex = wgpu_hal::dx12::Device::texture_from_raw(
+                resource,
+                wgpu_uv_fmt,
+                wgpu::TextureDimension::D2,
+                uv_size,
+                1,
+                1,
+            );
+
+            let y_texture =
+                device.create_texture_from_hal::<wgpu_hal::api::Dx12>(y_hal_tex, &y_wgpu_desc);
+            let uv_texture =
+                device.create_texture_from_hal::<wgpu_hal::api::Dx12>(uv_hal_tex, &uv_wgpu_desc);
+
+            Ok(DxgiZeroCopyTextures {
+                y_texture,
+                uv_texture,
+            })
+        })
+    }
 }
 
-/// Fallback / simulated stub on non-Windows platforms.
-///
-/// In test environments (or when testing cross-platform compatibility), supports
-/// allocating texture planes directly to validate pipeline shaders and zero-copy rendering.
+/// Fallback on non-Windows platforms where DXGI is unavailable.
 #[cfg(not(target_os = "windows"))]
 pub fn import_dxgi_zero_copy(
-    device: &wgpu::Device,
+    _device: &wgpu::Device,
     desc: &DxgiSharedHandle,
-    pixel_format: PixelFormat,
+    _pixel_format: PixelFormat,
 ) -> Result<DxgiZeroCopyTextures, RenderError> {
     if desc.handle == 0 {
         return Err(RenderError::ImportFailed(
             "Invalid DXGI shared handle (NULL)".into(),
         ));
-    }
-
-    // In cross-platform testing mode (handle == 0x1234 or negative mock handle), provide test textures
-    if desc.handle == 0x1234 || desc.handle < 0 {
-        let (wgpu_y_fmt, wgpu_uv_fmt) = match pixel_format {
-            PixelFormat::P010 => (
-                wgpu::TextureFormat::R16Unorm,
-                wgpu::TextureFormat::Rg16Unorm,
-            ),
-            _ => (wgpu::TextureFormat::R8Unorm, wgpu::TextureFormat::Rg8Unorm),
-        };
-
-        let y_desc = wgpu::TextureDescriptor {
-            label: Some("poppy_dxgi_mock_y_texture"),
-            size: wgpu::Extent3d {
-                width: desc.width,
-                height: desc.height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu_y_fmt,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        };
-
-        let uv_desc = wgpu::TextureDescriptor {
-            label: Some("poppy_dxgi_mock_uv_texture"),
-            size: wgpu::Extent3d {
-                width: (desc.width / 2).max(1),
-                height: (desc.height / 2).max(1),
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu_uv_fmt,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        };
-
-        let y_texture = device.create_texture(&y_desc);
-        let uv_texture = device.create_texture(&uv_desc);
-
-        return Ok(DxgiZeroCopyTextures {
-            y_texture,
-            uv_texture,
-        });
     }
 
     Err(RenderError::ImportFailed(

@@ -138,9 +138,8 @@ pub fn hevc_to_annex_b(
     convert_length_prefixed_to_annex_b(data, nls, output)
 }
 
-/// Shared length-prefixed → Annex-B loop.
-/// Rejects zero-length NALs (previously emitted a bare start code which
-/// confuses decoders) and returns structured errors instead of panicking.
+/// Shared length-prefixed → Annex-B conversion loop.
+/// Rejects zero-length NALs and returns structured errors instead of panicking.
 fn convert_length_prefixed_to_annex_b(
     data: &[u8],
     nls: usize,

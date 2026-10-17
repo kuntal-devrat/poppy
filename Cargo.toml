@@ -19,7 +19,7 @@ version = "0.6.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/kuntal-devrat/poppy"
-description = "Crisp, memory-safe video demuxing with zero-copy hardware decode"
+description = "Safe multimedia demuxing with hardware-accelerated video decoding and zero-copy GPU rendering"
 
 [workspace.dependencies]
 # Internal crates

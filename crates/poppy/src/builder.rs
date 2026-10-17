@@ -11,6 +11,7 @@ use poppy_render::ColorSpace;
 #[derive(Debug, Clone)]
 pub struct MediaStreamBuilder {
     pub(crate) stream_index: Option<usize>,
+    pub(crate) audio_stream_index: Option<usize>,
     pub(crate) hardware_acceleration: bool,
     pub(crate) software_fallback: bool,
     pub(crate) buffer_capacity: usize,
@@ -21,6 +22,7 @@ impl Default for MediaStreamBuilder {
     fn default() -> Self {
         Self {
             stream_index: None,
+            audio_stream_index: None,
             hardware_acceleration: true,
             software_fallback: true,
             buffer_capacity: 16,
@@ -41,6 +43,12 @@ impl MediaStreamBuilder {
     /// Select a specific stream track index to demux and decode.
     pub fn stream_index(mut self, index: usize) -> Self {
         self.stream_index = Some(index);
+        self
+    }
+
+    /// Select a specific audio stream track index to demux and decode.
+    pub fn audio_stream_index(mut self, index: usize) -> Self {
+        self.audio_stream_index = Some(index);
         self
     }
 

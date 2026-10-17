@@ -29,8 +29,8 @@ impl HevcSliceType {
     }
 }
 
-/// Prediction weight table (H.265 §7.3.6.3). Previously parsed-and-discarded;
-/// now stored for VA-API `luma/chroma_weight/offset` mapping.
+/// Prediction weight table (H.265 §7.3.6.3).
+/// Stored for hardware decoder `luma/chroma_weight/offset` mapping.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PredWeightTable {
     pub luma_log2_weight_denom: u32,

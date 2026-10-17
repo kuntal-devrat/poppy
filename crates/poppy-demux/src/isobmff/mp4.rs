@@ -296,10 +296,10 @@ impl Demuxer for Mp4Demuxer {
             });
         }
 
-        let target_pts = {
+        let (target_pts, target_idx) = {
             let track = &self.tracks[stream_index];
             match track.sample_table.find_keyframe_at_or_before(timestamp) {
-                Some(sample) => sample.pts.unwrap_or(sample.dts),
+                Some(sample) => (sample.pts.unwrap_or(sample.dts), sample.index as usize),
                 None => {
                     self.read_indices[stream_index] = 0;
                     // Still sync other tracks to start.
@@ -313,12 +313,6 @@ impl Demuxer for Mp4Demuxer {
             }
         };
         let target_tb = self.tracks[stream_index].time_base;
-        // Convert target PTS to each track's timebase with integer rescale.
-        let target_idx = self.tracks[stream_index]
-            .sample_table
-            .find_keyframe_at_or_before(timestamp)
-            .map(|s| s.index as usize)
-            .unwrap_or(0);
         self.read_indices[stream_index] = target_idx;
 
         // Synchronize other tracks: pick the last sample with PTS <= target

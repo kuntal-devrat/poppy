@@ -80,7 +80,7 @@ pub struct MatroskaTrack {
 }
 
 /// A parsed media sample from a Matroska Cluster.
-/// Each laced frame is expanded to its own sample (previously merged).
+/// Each laced frame is expanded to its own sample.
 #[derive(Debug, Clone)]
 pub struct MatroskaSample {
     pub track_num: u64,
@@ -91,27 +91,26 @@ pub struct MatroskaSample {
 }
 
 enum Source {
-    Mmap(memmap2::Mmap),
+    Mmap(Bytes),
     Bytes(Bytes),
 }
 
 impl Source {
+    #[inline]
     pub fn as_slice(&self) -> &[u8] {
         match self {
-            Self::Mmap(m) => &m[..],
+            Self::Mmap(b) => &b[..],
             Self::Bytes(b) => &b[..],
         }
     }
 
+    #[inline]
     pub fn extract(&self, start: usize, len: usize) -> Bytes {
         match self {
-            // Bounds are checked by callers; debug-assert to catch corrupt
-            // data_range before panicking in release.
-            Self::Mmap(m) => {
-                debug_assert!(start.saturating_add(len) <= m.len());
-                Bytes::copy_from_slice(&m[start..start + len])
+            Self::Mmap(b) | Self::Bytes(b) => {
+                debug_assert!(start.saturating_add(len) <= b.len());
+                b.slice(start..start + len)
             }
-            Self::Bytes(b) => b.slice(start..start + len),
         }
     }
 }
@@ -148,7 +147,6 @@ fn matroska_timebase(timestamp_scale_ns: u64) -> TimeBase {
 }
 
 /// Strict CodecPrivate parsing branched on CodecID.
-/// Previously tried AvcC→HvcC→Av1C→VpcC blindly, misclassifying HEVC as H264.
 fn parse_codec_private(codec_id_str: &str, payload: &[u8]) -> Option<CodecConfig> {
     match codec_id_str {
         "V_MPEG4/ISO/AVC" => AvcCRecord::parse(payload).ok().map(CodecConfig::H264),
@@ -324,7 +322,8 @@ impl MatroskaDemuxer {
         let file = File::open(path)?;
         // SAFETY: see Mp4Demuxer::open — read-only mapping, no concurrent truncation.
         let mmap = unsafe { memmap2::Mmap::map(&file)? };
-        Self::init(Source::Mmap(mmap))
+        let bytes = Bytes::from_owner(mmap);
+        Self::init(Source::Mmap(bytes))
     }
 
     /// Opens from any `Read + Seek` source without requiring mmap.
@@ -472,7 +471,6 @@ impl MatroskaDemuxer {
                             let mut height = 0u32;
 
                             // Audio settings: None until explicitly parsed.
-                            // Previously defaulted to 2ch/48kHz which hid missing metadata.
                             let mut audio_channels: Option<u16> = None;
                             let mut audio_sample_rate: Option<u32> = None;
                             let mut audio_bit_depth: Option<u16> = None;
@@ -627,10 +625,6 @@ impl MatroskaDemuxer {
                                     bits_per_sample: bd,
                                     extradata,
                                 });
-                            } else if matches!(codec_config, CodecConfig::Unknown) {
-                                // No fake VP9 config: leave Unknown so the
-                                // pipeline reports UnsupportedCodec instead of
-                                // lying about 8-bit BT.709.
                             }
 
                             let codec_delay_ticks =
@@ -864,7 +858,7 @@ impl MatroskaDemuxer {
         // Matroska timebase without u64->u32 truncation.
         let time_base = matroska_timebase(timestamp_scale_ns);
 
-        // Drop samples referencing unknown tracks (previously misattributed to stream 0).
+        // Drop samples referencing unknown tracks.
         samples.retain(|s| tracks.iter().any(|t| t.track_num == s.track_num));
         // Sort cues by time for seeking.
         cues.sort_by_key(|c| c.time_ticks);

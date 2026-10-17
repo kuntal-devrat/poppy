@@ -242,20 +242,17 @@ pub fn import_dmabuf_zero_copy(
                 .copied()
                 .unwrap_or(desc.width * desc.height);
             let uv_pitch = desc.pitches.get(1).copied().unwrap_or(desc.width);
-            // Honest multi-object check: single-fd import cannot represent
-            // separate Y/UV GEM handles. Offsets must lie within one allocation.
-            // If the container exported multiple fds (flattened to objects[0]),
-            // surface.rs already rejects; here validate offsets are monotonic.
+            // Single-fd import requires all planes to reside in one allocation.
+            // Descriptors with more than two offsets require separate memory objects.
             if desc.offsets.len() > 2 {
                 return Err(RenderError::ImportFailed(
                     "multi-plane DMA-BUF with >2 offsets not supported in single-memory import"
                         .into(),
                 ));
             }
-            // Tiling modifier: only LINEAR (0) and INVALID (all-ones, treat as linear)
-            // are safe with OPTIMAL tiling + explicit offsets. Other modifiers
-            // (Intel X/Y-tiled, AMD DCC) require VkImageDrmFormatModifierExplicitCreateInfo
-            // which wgpu-hal does not yet expose; fail honestly instead of misrendering.
+            // Tiling modifier: only LINEAR (0) and INVALID (all-ones, treated as linear)
+            // are supported with OPTIMAL tiling + explicit offsets. Non-linear modifiers
+            // (e.g. Intel X/Y-tiled, AMD DCC) require explicit DRM modifier import support.
             const DRM_FORMAT_MOD_LINEAR: u64 = 0;
             const DRM_FORMAT_MOD_INVALID: u64 = 0x00FF_FFFF_FFFF_FFFF;
             if desc.drm_modifier != DRM_FORMAT_MOD_LINEAR

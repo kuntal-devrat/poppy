@@ -38,8 +38,8 @@ impl DpbState {
     }
 }
 
-/// Film grain parameters (AV1 §5.9.30). Previously parsed-and-discarded;
-/// now stored for VA-API `VAFilmGrainStructAV1` mapping.
+/// Film grain parameters (AV1 §5.9.30).
+/// Stored for hardware decoder film grain synthesis.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct FilmGrainParams {
     pub apply_grain: bool,

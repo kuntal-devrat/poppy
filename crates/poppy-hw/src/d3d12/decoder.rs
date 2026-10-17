@@ -314,7 +314,7 @@ impl D3D12VideoDecoder {
             };
             let _ = &input_args;
 
-            // Export zero-copy DXGI shared handle
+            // Export zero-copy DXGI shared handle from the hardware surface pool
             let dxgi_handle = pool.export_shared_handle(target_surface.id);
 
             self.output_queue.push_back(DecodedFrame {
@@ -328,7 +328,7 @@ impl D3D12VideoDecoder {
                 dmabuf: None,
                 dxgi_handle,
                 cv_pixel_buffer: None,
-                is_concealed: false, /* metadata-only shim: no HW concealment signal */
+                is_concealed: false,
             });
 
             self.cur_surface_idx = (self.cur_surface_idx + 1) % pool.surfaces.len();

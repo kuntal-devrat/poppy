@@ -153,7 +153,7 @@ impl VideoPlayerApp {
             target
         };
 
-        println!("⏩ Seeking to {:.2}s...", target);
+        println!("Seeking to {:.2}s...", target);
         let stream_target = self.first_pts_sec + target;
         if let Some(stream) = &mut self.stream {
             match stream.seek_exact(stream_target) {
@@ -167,7 +167,7 @@ impl VideoPlayerApp {
                     self.frame_count += 1;
                 }
                 Ok(None) => {}
-                Err(e) => eprintln!("⚠️ Seek error: {e}"),
+                Err(e) => eprintln!("Seek error: {e}"),
             }
         }
 
@@ -226,11 +226,7 @@ impl VideoPlayerApp {
         let rel_sec = self.relative_position();
         let cur_str = format!("{:02}:{:05.2}", (rel_sec as u64) / 60, rel_sec % 60.0);
 
-        let state_str = if self.is_paused {
-            "⏸ PAUSED"
-        } else {
-            "▶ PLAYING"
-        };
+        let state_str = if self.is_paused { "PAUSED" } else { "PLAYING" };
         let fmt_str = self
             .current_frame
             .as_ref()
@@ -238,9 +234,9 @@ impl VideoPlayerApp {
             .unwrap_or_else(|| "Unknown".to_string());
 
         let audio_indicator = if self.has_audio_stream {
-            "🔊 Audio: Sync"
+            "Audio: Sync"
         } else {
-            "🔇 No Audio"
+            "No Audio"
         };
 
         println!(
@@ -288,11 +284,11 @@ impl ApplicationHandler for VideoPlayerApp {
             return;
         }
 
-        println!("🎬 Initializing hardware-accelerated playback pipeline...");
+        println!("Initializing hardware-accelerated playback pipeline...");
         let mut stream = match poppy::open(&self.file_path) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("❌ Failed to open media: {e}");
+                eprintln!("Error: failed to open media: {e}");
                 event_loop.exit();
                 return;
             }
@@ -317,7 +313,7 @@ impl ApplicationHandler for VideoPlayerApp {
             }
             Ok(None) => (1280, 720),
             Err(e) => {
-                eprintln!("⚠️ Warning reading initial frame: {e}");
+                eprintln!("Warning: failed reading initial frame: {e}");
                 (1280, 720)
             }
         };
@@ -337,13 +333,13 @@ impl ApplicationHandler for VideoPlayerApp {
             .unwrap_or("Poppy Player");
 
         let window_attrs = WindowAttributes::default()
-            .with_title(format!("🌸 Poppy Player — {filename}"))
+            .with_title(format!("Poppy Player — {filename}"))
             .with_inner_size(LogicalSize::new(display_w, display_h));
 
         let window = match event_loop.create_window(window_attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
-                eprintln!("❌ Failed to create window: {e}");
+                eprintln!("Error: failed to create window: {e}");
                 event_loop.exit();
                 return;
             }
@@ -352,7 +348,7 @@ impl ApplicationHandler for VideoPlayerApp {
         let mut renderer = match GpuRenderer::new_sync() {
             Ok(r) => r,
             Err(e) => {
-                eprintln!("❌ Failed to create wgpu renderer: {e}");
+                eprintln!("Error: failed to create wgpu renderer: {e}");
                 event_loop.exit();
                 return;
             }
@@ -361,7 +357,7 @@ impl ApplicationHandler for VideoPlayerApp {
         let surface = match renderer.instance.create_surface(window.clone()) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("❌ Failed to create wgpu surface: {e}");
+                eprintln!("Error: failed to create wgpu surface: {e}");
                 event_loop.exit();
                 return;
             }
@@ -376,7 +372,7 @@ impl ApplicationHandler for VideoPlayerApp {
             .unwrap_or(caps.formats[0]);
 
         if let Err(e) = renderer.set_output_format(surface_format) {
-            eprintln!("⚠️ Failed to match surface output format: {e}");
+            eprintln!("Warning: failed to match surface output format: {e}");
         }
 
         // Select platform-optimal vsync present mode to eliminate screen tearing while avoiding
@@ -408,7 +404,7 @@ impl ApplicationHandler for VideoPlayerApp {
         surface.configure(&renderer.device, &config);
 
         println!(
-            "📺 Window created: {}x{} (Surface: {:?}, VSync: {:?})",
+            "Window created: {}x{} (Surface: {:?}, VSync: {:?})",
             inner_size.width, inner_size.height, surface_format, present_mode
         );
         if self.has_audio_stream
@@ -418,21 +414,21 @@ impl ApplicationHandler for VideoPlayerApp {
             match AudioSink::try_new(cfg.sample_rate, cfg.channels) {
                 Ok(sink) => {
                     println!(
-                        "🔊 Audio stream detected ({} Hz, {} channels): Pure-Rust in-process playback active",
+                        "Audio stream detected ({} Hz, {} channels): in-process playback active",
                         cfg.sample_rate, cfg.channels
                     );
                     self.audio_sink = Some(sink);
                     self.pump_audio();
                 }
                 Err(e) => {
-                    eprintln!("⚠️ Failed to initialize audio sink: {e}");
+                    eprintln!("Warning: failed to initialize audio sink: {e}");
                 }
             }
         } else if !self.has_audio_stream {
-            println!("🔇 No audio stream present in container");
+            println!("No audio stream present in container");
         }
         println!(
-            "⌨️  Controls: [Space] Pause/Play | [Left/Right] Seek ±5s | [R] Replay | [Q/Esc] Quit\n"
+            "Controls: [Space] Pause/Play | [Left/Right] Seek +/-5s | [R] Replay | [Q/Esc] Quit\n"
         );
 
         self.window = Some(window);
@@ -454,7 +450,7 @@ impl ApplicationHandler for VideoPlayerApp {
     ) {
         match event {
             WindowEvent::CloseRequested => {
-                println!("\n👋 Closing Poppy Video Player.");
+                println!("\nClosing Poppy Video Player.");
                 event_loop.exit();
             }
 
@@ -488,11 +484,11 @@ impl ApplicationHandler for VideoPlayerApp {
                     if self.is_paused {
                         self.paused_at_position = self.relative_position();
                         self.pause_audio();
-                        println!("⏸ Paused at {:.2}s", self.paused_at_position);
+                        println!("Paused at {:.2}s", self.paused_at_position);
                     } else {
                         self.playback_start = Some(Instant::now());
                         self.resume_audio();
-                        println!("▶ Resumed playback");
+                        println!("Resumed playback");
                     }
                     if let Some(w) = &self.window {
                         w.request_redraw();
@@ -505,11 +501,11 @@ impl ApplicationHandler for VideoPlayerApp {
                     self.seek_relative(-5.0);
                 }
                 KeyCode::KeyR => {
-                    println!("🔄 Replaying from start...");
+                    println!("Replaying from start...");
                     self.seek_relative(-self.relative_position());
                 }
                 KeyCode::Escape | KeyCode::KeyQ => {
-                    println!("\n👋 Exiting.");
+                    println!("\nExiting.");
                     event_loop.exit();
                 }
                 _ => {}
@@ -554,14 +550,14 @@ impl ApplicationHandler for VideoPlayerApp {
                             Ok(false) => {
                                 // End of stream reached
                                 println!(
-                                    "🏁 End of stream reached. [Press 'R' to Replay, 'Q' to Exit]"
+                                    "End of stream reached. [Press 'R' to Replay, 'Q' to Exit]"
                                 );
                                 self.is_paused = true;
                                 self.pause_audio();
                                 break;
                             }
                             Err(e) => {
-                                eprintln!("⚠️ Decode error during playback: {e}");
+                                eprintln!("Decode error during playback: {e}");
                                 break;
                             }
                         }
@@ -582,7 +578,7 @@ impl ApplicationHandler for VideoPlayerApp {
                             if let Err(e) =
                                 renderer.render_frame_to_view_with_viewport(frame, &view, viewport)
                             {
-                                eprintln!("⚠️ Render error: {e}");
+                                eprintln!("Render error: {e}");
                             }
 
                             output.present();
@@ -600,7 +596,7 @@ impl ApplicationHandler for VideoPlayerApp {
                             }
                         }
                         Err(wgpu::SurfaceError::OutOfMemory) => {
-                            eprintln!("❌ Out of GPU memory!");
+                            eprintln!("Error: out of GPU memory");
                             event_loop.exit();
                             return;
                         }

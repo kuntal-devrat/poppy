@@ -422,7 +422,7 @@ impl VaapiAv1Decoder {
             pic_param.wm[i].wmmat[7] = 0;
         }
 
-        // Film grain mapping to VAFilmGrainStructAV1 (previously discarded).
+        // Film grain mapping to VAFilmGrainStructAV1.
         {
             let g = &fh.film_grain;
             let mut fields: u32 = 0;
@@ -678,7 +678,7 @@ impl HwDecoder for VaapiAv1Decoder {
                             let idx = fh.frame_to_show_map_idx as usize;
                             if idx < 8 && self.dpb_slots[idx] != VA_INVALID_ID {
                                 let surf_id = self.dpb_slots[idx];
-                                // Use frame dims, not max (previously max() reported oversized metadata).
+                                // Use frame dimensions if present, otherwise fall back to sequence max.
                                 let width = if fh.frame_width > 0 {
                                     fh.frame_width
                                 } else {

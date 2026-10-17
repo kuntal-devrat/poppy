@@ -102,6 +102,13 @@ pub const IID_ID3D12DEVICE: GUID = GUID::from_values(
     [0xBE, 0x54, 0x18, 0x21, 0x33, 0x9B, 0x85, 0xF7],
 );
 
+pub const IID_ID3D12RESOURCE: GUID = GUID::from_values(
+    0x696442BE,
+    0xA72E,
+    0x4059,
+    [0xBC, 0x79, 0x5B, 0x5C, 0x98, 0x04, 0x0F, 0xAD],
+);
+
 pub type HRESULT = i32;
 pub const S_OK: HRESULT = 0;
 pub const E_FAIL: HRESULT = -2147467259; // 0x80004005
@@ -476,7 +483,10 @@ impl D3d12Functions {
         // We declare them as extern "system" to call the real Win32 APIs.
         unsafe extern "system" {
             fn LoadLibraryW(lp_lib_file_name: *const u16) -> HMODULE;
-            fn GetProcAddress(h_module: HMODULE, lp_proc_name: *const u8) -> *mut c_void;
+            fn GetProcAddress(
+                h_module: HMODULE,
+                lp_proc_name: *const std::ffi::c_char,
+            ) -> *mut c_void;
         }
 
         fn to_wide(s: &str) -> Vec<u16> {
@@ -484,7 +494,7 @@ impl D3d12Functions {
         }
 
         unsafe fn sym(handle: HMODULE, name: &[u8]) -> *mut c_void {
-            unsafe { GetProcAddress(handle, name.as_ptr()) }
+            unsafe { GetProcAddress(handle, name.as_ptr() as *const std::ffi::c_char) }
         }
 
         let d3d12_dll = to_wide("d3d12.dll");

@@ -8,8 +8,8 @@ Only the latest major release receives active security patches.
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.5.x   | :white_check_mark: |
-| < 0.5.0 | :x:                |
+| 0.6.x   | :white_check_mark: |
+| < 0.6.0 | :x:                |
 
 ## Security Architecture & Philosophy
 
@@ -25,7 +25,7 @@ Only the latest major release receives active security patches.
 If you discover a potential vulnerability in Project Poppy, please do **NOT** open a public issue.
 
 Please report vulnerabilities privately via email to:
-📧 **`security@projectpoppy.dev`** (or create a Private Vulnerability Advisory on GitHub).
+**`security@projectpoppy.dev`** (or create a Private Vulnerability Advisory on GitHub).
 
 Include:
 - A description of the vulnerability and attack vector.
